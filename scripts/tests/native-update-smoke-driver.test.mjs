@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   inspectDurableStaging,
-  observeBootstrapRecovery,
   platformStatePaths,
-  writeBootstrapVerificationFixture,
 } from "../native-update-platform-adapter.mjs";
 import { combineDriverErrors, runNativeUpdateSmokeDriver } from "../native-update-smoke-driver.mjs";
 import { NORMAL_CHECKPOINTS } from "../update-smoke-evidence.mjs";
@@ -26,7 +24,6 @@ function adapter(events, fail = {}) {
     platform: { packageKind: "app-tar-gz", installerKind: "dmg", installScope: "user", codeSigning: "verified", notarization: "verified" },
     initialize: () => invoke("initialize"),
     installBaseline: () => invoke("installBaseline", { root: "/app" }),
-    installBootstrap: () => invoke("installBootstrap", { root: "/app" }),
     withCandidateGate: async (_options, action) => {
       events.push("gate:start");
       const result = await action({ waitForAllRequests: () => invoke("gate:requests") });
@@ -41,7 +38,6 @@ function adapter(events, fail = {}) {
     assertNotRelaunched: () => invoke("no-relaunch"),
     inspectTrustedConfiguration: () => invoke("trust"),
     inspectPreservedData: () => invoke("preserved-data"),
-    proveBootstrapRecovery: () => invoke("recovery", { pid: 8 }),
     cleanup: () => invoke("cleanup"),
   };
 }
@@ -120,35 +116,4 @@ test("平台 state path 固定在 Tauri identifier 的 data/cache 边界", () =>
   assert.equal(mac.stagingRoot, "/Users/runner/Library/Caches/com.cyunlab.narrant.upgrade-test/application-update");
   const windows = platformStatePaths("windows-x86_64", { APPDATA: "C:\\Users\\runner\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\runner\\AppData\\Local" });
   assert.equal(windows.stagingRoot, "C:\\Users\\runner\\AppData\\Local\\com.cyunlab.narrant.upgrade-test\\application-update");
-});
-
-test("bootstrap fixture 以严格更高版本进入验签分支并观察完整 recovery cleanup/diagnostic", async (context) => {
-  const root = await mkdtemp(join(tmpdir(), "narrant-bootstrap-recovery-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
-  const state = {
-    stagingRoot: join(root, "cache", "application-update"),
-    diagnostics: join(root, "data", "logs", "application-update.jsonl"),
-  };
-  const fixture = await writeBootstrapVerificationFixture(state.stagingRoot, {
-    currentVersion: "2.0.9",
-    target: "darwin-aarch64",
-    installKind: "macos_app_archive",
-  });
-  assert.equal(fixture.version, "2.0.10");
-  const metadata = JSON.parse(await readFile(join(state.stagingRoot, fixture.generation, "metadata.json"), "utf8"));
-  assert.deepEqual(metadata, {
-    schemaVersion: 2,
-    version: "2.0.10",
-    signature: "invalid-bootstrap-verification-signature",
-    target: "darwin-aarch64",
-    installKind: "macos_app_archive",
-    releaseNotes: "bootstrap verification recovery fixture",
-  });
-
-  await rm(join(state.stagingRoot, "current"));
-  await mkdir(join(root, "data", "logs"), { recursive: true });
-  await writeFile(state.diagnostics, '{"event":"transition-warning","sequence":1,"version":null,"category":"verification","operationId":null,"httpStatus":null}\n');
-  await assert.rejects(() => observeBootstrapRecovery(state, fixture.generation, { timeoutMilliseconds: 20 }), /generation/);
-  await rm(join(state.stagingRoot, fixture.generation), { recursive: true });
-  await assert.doesNotReject(() => observeBootstrapRecovery(state, fixture.generation, { timeoutMilliseconds: 100 }));
 });

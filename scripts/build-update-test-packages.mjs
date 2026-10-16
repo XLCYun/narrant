@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { runBoundedCommand } from "./update-smoke-tools.mjs";
 import { UPDATE_TEST_PROFILE } from "./update-test-profile.mjs";
 import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
-import { verifyTauriUpdaterSignature } from "./release-assets.mjs";
+import { normalizeTauriUpdaterSignature, updaterPublicKeySha256, verifyTauriUpdaterSignature } from "./release-assets.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const CLI = path.join(ROOT, "node_modules/@tauri-apps/cli/tauri.js");
@@ -17,6 +17,15 @@ const credentialFiles = ["application_settings/credential.rs", "application_sett
 
 /** 用实际文件字节记录源码叠加与包身份。 */
 function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
+
+/** 收敛 Tauri signer 生成公钥末尾的单个 LF，随后用正式校验器验证精确格式。 */
+export function normalizeGeneratedPublicKey(encoded) {
+  const decoded = Buffer.from(encoded.trim(), "base64").toString("utf8");
+  const normalized = decoded.endsWith("\n") && !decoded.endsWith("\n\n") ? decoded.slice(0, -1) : decoded;
+  const canonical = Buffer.from(normalized).toString("base64");
+  updaterPublicKeySha256(canonical);
+  return canonical;
+}
 
 /** 仅向源码叠加测试身份、内存凭据和观察入口，不更改各版本的更新器实现。 */
 export async function prepareUpdateTestSource(directory, version, publicKey) {
@@ -100,21 +109,21 @@ export async function buildUpdateTestPackages(options, environment = process.env
   buildEnvironment.NARRANT_CARGO_LOCK_FILE ??= path.join((await runBoundedCommand("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: ROOT, environment: buildEnvironment })).trim(), "narrant-cargo-agent.lock");
   const privateKeyPath = path.join(output, "test-only.key");
   const password = "narrant-upgrade-test";
-  await runBoundedCommand(process.execPath, [CLI, "signer", "generate", "--ci", "--password", password, "--write-keys", privateKeyPath], { environment: buildEnvironment });
-  const publicKey = (await readFile(`${privateKeyPath}.pub`, "utf8")).trim();
-  Object.assign(buildEnvironment, {
-    CI: "true", NARRANT_UPDATER_ENDPOINT: FIXED_STABLE_ENDPOINT, NARRANT_UPDATER_PUBLIC_KEY: publicKey,
-    TAURI_SIGNING_PRIVATE_KEY: await readFile(privateKeyPath, "utf8"), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password,
-    APPLE_SIGNING_IDENTITY: "-",
-  });
-  const recipe = await Promise.all([
-    readFile(path.join(ROOT, "scripts/build-update-test-packages.mjs")),
-    readFile(path.join(ROOT, "src-tauri/src/tauri_app/upgrade_smoke.rs")),
-    readFile(path.join(ROOT, "src-tauri/tauri.upgrade-test.conf.json")),
-    readFile(path.join(ROOT, "scripts/update-test-profile.mjs")),
-  ]);
-  const receipt = { schemaVersion: 1, profile: UPDATE_TEST_PROFILE, target, publicKey, recipeSha256: sha256(Buffer.concat(recipe)), builds: {} };
   try {
+    await runBoundedCommand(process.execPath, [CLI, "signer", "generate", "--ci", "--password", password, "--write-keys", privateKeyPath], { environment: buildEnvironment });
+    const publicKey = normalizeGeneratedPublicKey(await readFile(`${privateKeyPath}.pub`, "utf8"));
+    Object.assign(buildEnvironment, {
+      CI: "true", NARRANT_UPDATER_ENDPOINT: FIXED_STABLE_ENDPOINT, NARRANT_UPDATER_PUBLIC_KEY: publicKey,
+      TAURI_SIGNING_PRIVATE_KEY: await readFile(privateKeyPath, "utf8"), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password,
+      APPLE_SIGNING_IDENTITY: "-",
+    });
+    const recipe = await Promise.all([
+      readFile(path.join(ROOT, "scripts/build-update-test-packages.mjs")),
+      readFile(path.join(ROOT, "src-tauri/src/tauri_app/upgrade_smoke.rs")),
+      readFile(path.join(ROOT, "src-tauri/tauri.upgrade-test.conf.json")),
+      readFile(path.join(ROOT, "scripts/update-test-profile.mjs")),
+    ]);
+    const receipt = { schemaVersion: 1, profile: UPDATE_TEST_PROFILE, target, publicKey, recipeSha256: sha256(Buffer.concat(recipe)), builds: {} };
     for (const stage of ["baseline", "candidate"]) {
       const sourceSha = options[`${stage}Sha`];
       const version = options[`${stage}Version`];
@@ -141,9 +150,9 @@ export async function buildUpdateTestPackages(options, environment = process.env
       if (packages.length !== 1) throw new Error("测试构建 updater 包不唯一");
       const destination = path.join(output, `${stage}${suffix}`);
       await cp(packages[0], destination);
-      await cp(`${packages[0]}.sig`, `${destination}.sig`);
+      const signature = normalizeTauriUpdaterSignature(await readFile(`${packages[0]}.sig`, "utf8"));
+      await writeFile(`${destination}.sig`, signature);
       const bytes = await readFile(destination);
-      const signature = await readFile(`${destination}.sig`, "utf8");
       verifyTauriUpdaterSignature(bytes, signature, publicKey);
       receipt.builds[stage] = { sourceSha, sourceVersion, version, overlay, overlaySha256: sha256(overlay), packageSha256: sha256(bytes), signatureSha256: sha256(signature), package: path.basename(destination), signature: `${path.basename(destination)}.sig` };
       // 专为本次打包创建的导出树不是开发 worktree；保留源码/补丁/日志，回收已导出的构建产物。
@@ -155,6 +164,10 @@ export async function buildUpdateTestPackages(options, environment = process.env
   } finally {
     await rm(privateKeyPath, { force: true });
     delete buildEnvironment.TAURI_SIGNING_PRIVATE_KEY;
+    for (const stage of ["baseline", "candidate"]) {
+      await rm(path.join(output, `${stage}-source/src-tauri/target`), { recursive: true, force: true });
+      await rm(path.join(output, `${stage}-source/node_modules`), { recursive: true, force: true });
+    }
   }
 }
 

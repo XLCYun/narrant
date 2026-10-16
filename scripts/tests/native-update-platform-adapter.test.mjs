@@ -23,6 +23,21 @@ test("升级保留断言拒绝项目丢失、身份重建和设置重置", () =>
   }
 });
 
+test("升级观察接受 Windows canonicalize 长路径，仍拒绝其他仓库和不同 POSIX 路径", () => {
+  for (const [observed, expected] of [
+    [String.raw`\\?\C:\Users\runner\repo`, String.raw`C:\Users\runner\repo`],
+    [String.raw`\\?\UNC\server\share\repo`, String.raw`\\server\share\repo`],
+  ]) {
+    const value = { theme: "dark", language: "en-US", navigation: {
+      repositories: [{ canonicalPath: observed, availability: { kind: "available" } }],
+    } };
+    assert.doesNotThrow(() => verifyPreservedUpgradeData(value, undefined, expected));
+    assert.throws(() => verifyPreservedUpgradeData(value, undefined, `${expected}-other`), /升级/);
+    value.navigation.repositories[0].canonicalPath = "/Fixture";
+    assert.throws(() => verifyPreservedUpgradeData(value, undefined, "/fixture"), /升级/);
+  }
+});
+
 // 直接经过初始化失败和真实清理入口，证明已有用户数据不会被失败收尾删除。
 for (const existing of ["dataRoot", "cacheRoot"]) {
   test(`初始化拒绝已有 ${existing} 后，清理仍保留原数据`, async t => {

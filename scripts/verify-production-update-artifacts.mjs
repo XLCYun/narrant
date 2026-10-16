@@ -12,6 +12,13 @@ import { runBoundedCommand, selectCommandEnvironment } from "./update-smoke-tool
 /** 计算正式文件的摘要，独立于测试包的签名和文件记录。 */
 function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 
+/** 正式 Windows EXE 的版本资源必须与发布版本和产品一致，允许 Win32 的末尾零段。 */
+export function verifyWindowsVersionResource(resource, expectedVersion) {
+  if (resource.productName !== "Narrant" || ![expectedVersion, `${expectedVersion}.0`].includes(resource.productVersion)) {
+    throw new Error("正式 Windows 包产品身份或版本不一致");
+  }
+}
+
 /** 查找解包后的正式主程序；只读取文件，不执行安装器或应用。 */
 async function findExecutable(directory) {
   const result = [];
@@ -72,6 +79,12 @@ export async function verifyProductionUpdateArtifacts(options, environment = pro
         const executables = await findExecutable(directory);
         if (executables.length !== 1) throw new Error("正式 NSIS 包主程序不唯一");
         executable = executables[0];
+        for (const inspect of [file, executable]) {
+          const escaped = inspect.replaceAll("'", "''");
+          const resource = JSON.parse(await command("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+            `$v=(Get-Item -LiteralPath '${escaped}').VersionInfo;[Console]::Out.Write((@{productName=$v.ProductName;productVersion=$v.ProductVersion}|ConvertTo-Json -Compress))`]));
+          verifyWindowsVersionResource(resource, version);
+        }
       }
       const binary = await readFile(executable);
       if (!binary.includes(Buffer.from(FIXED_STABLE_ENDPOINT)) || !binary.includes(Buffer.from(key))) throw new Error(`${stage} 正式程序缺少预期更新信任根`);

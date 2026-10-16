@@ -132,7 +132,8 @@ byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，
 <candidate-version> <new-output-directory>`，随后 `pnpm test:upgrade:run <test-builds.json> <new-evidence-directory>`。
 运行需要当前交互桌面；记录环境应如实填写已有 `RUNNER_NAME` 与 `RUNNER_ENVIRONMENT=self-hosted`。
 
-当前升级驱动不再执行 bootstrap。以下保留早期迁移流程作为历史记录，不是当前共享桌面可执行步骤：
+2026-10-16 已匿名读取 OSS Stable endpoint，当前为 v1.2.14；当前升级驱动只执行 normal。
+以下保留早期迁移流程作为历史记录，不是当前共享桌面可执行步骤：
 
 ### 历史一次性 OSS Stable bootstrap
 

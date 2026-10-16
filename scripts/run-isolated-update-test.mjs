@@ -71,6 +71,7 @@ export async function runIsolatedUpdateTest(receiptPath, outputDirectory, enviro
   }));
   const result = {
     evidenceKind: "isolated-native-preflight",
+    execution: environment.GITHUB_ACTIONS === "true" ? "github-actions" : "local",
     productionArtifactsVerified: false,
     ...observation,
     testBuilds: {

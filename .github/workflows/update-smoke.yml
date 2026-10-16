@@ -338,11 +338,7 @@ jobs:
             --draft-receipt aggregate-draft-receipt.json
             --max-age-hours 24
           )
-          if [[ "$MODE" == bootstrap ]]; then
-            args+=(--allow-bootstrap --bootstrap-tag "$SOURCE_TAG")
-          else
-            args+=(--previous-tag "$PREVIOUS_TAG" --previous-manifest-sha256 "$PREVIOUS_MANIFEST_SHA256")
-          fi
+          args+=(--previous-tag "$PREVIOUS_TAG" --previous-manifest-sha256 "$PREVIOUS_MANIFEST_SHA256")
           node scripts/update-smoke-evidence.mjs "${args[@]}"
       - name: Upload verified aggregate evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

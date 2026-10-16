@@ -1,16 +1,16 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir, version, release } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { setTimeout } from "node:timers";
+import { setTimeout, clearTimeout } from "node:timers";
 
 import { releaseAssetNames, verifyTauriUpdaterSignature } from "./release-assets.mjs";
 import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
 import { createCandidateGateRoutes, withUpdateSmokeTlsGate } from "./update-smoke-tls-gate.mjs";
-import { runBoundedCommand } from "./update-smoke-tools.mjs";
+import { runBoundedCommand, selectCommandEnvironment } from "./update-smoke-tools.mjs";
 import { UPDATE_TEST_PROFILE } from "./update-test-profile.mjs";
 
 const APP_IDENTIFIER = UPDATE_TEST_PROFILE.identifier;
@@ -20,7 +20,6 @@ const TARGETS = Object.freeze({
   "windows-x86_64": Object.freeze({ platform: "win32", arch: "x64", installKind: "windows_nsis" }),
 });
 const MAX_METADATA_BYTES = 64 * 1024;
-const MAX_DIAGNOSTICS_BYTES = 256 * 1024;
 
 /** 记录实际自托管主机，避免把 Windows 10/macOS 27 冒称为旧托管镜像。 */
 export function describeUpdateSmokeRunner(target, environment = process.env) {
@@ -42,11 +41,19 @@ export function describeUpdateSmokeRunner(target, environment = process.env) {
 /** 计算完整 bytes 的 lowercase SHA-256。 */
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 
+/** 对齐 Rust canonicalize 的 Windows 长路径与 Node realpath，不改变 POSIX 大小写语义。 */
+function comparablePath(value) {
+  if (typeof value !== "string") return undefined;
+  const plain = value.startsWith("\\\\?\\UNC\\") ? `\\\\${value.slice(8)}`
+    : value.startsWith("\\\\?\\") ? value.slice(4) : value;
+  return /^[a-z]:[\\/]|^\\\\/i.test(plain) ? path.win32.normalize(plain).toLowerCase() : path.posix.normalize(plain);
+}
+
 /** 比较升级前后的真实应用投影；缺失或重建项目不能通过保留检查。 */
 export function verifyPreservedUpgradeData(value, baseline, repositoryPath) {
   const repositories = value.navigation?.repositories;
   if (value.theme !== "dark" || value.language !== "en-US" || !Array.isArray(repositories) || repositories.length !== 1 ||
-      repositories[0].canonicalPath !== repositoryPath || repositories[0].availability?.kind !== "available") {
+      comparablePath(repositories[0].canonicalPath) !== comparablePath(repositoryPath) || repositories[0].availability?.kind !== "available") {
     throw new Error("升级后的模拟项目或设置不完整");
   }
   if (baseline && JSON.stringify(value.navigation) !== JSON.stringify(baseline.navigation)) throw new Error("升级后项目身份或历史发生变化");
@@ -54,78 +61,6 @@ export function verifyPreservedUpgradeData(value, baseline, repositoryPath) {
 
 /** 有界轮询共用的短暂停顿。 */
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
-
-/** 为 bootstrap recovery fixture 生成严格高于当前 Stable 的下一个 patch 版本。 */
-function nextPatchVersion(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version ?? "");
-  if (!match) throw new Error("bootstrap current version 不是稳定三段版本");
-  return `${match[1]}.${match[2]}.${BigInt(match[3]) + 1n}`;
-}
-
-/** 写入字段均有效但签名/包必然失败的严格更高版本 staging fixture。 */
-export async function writeBootstrapVerificationFixture(stagingRoot, options) {
-  const generation = "generation-00000000-0000-4000-8000-000000000001";
-  const root = path.join(stagingRoot, generation);
-  const version = nextPatchVersion(options.currentVersion);
-  await mkdir(root, { recursive: true });
-  await Promise.all([
-    writeFile(path.join(root, "package.bin"), "tampered-bootstrap-package", { flag: "wx" }),
-    writeFile(path.join(root, "metadata.json"), `${JSON.stringify({
-      schemaVersion: 2,
-      version,
-      signature: "invalid-bootstrap-verification-signature",
-      target: options.target,
-      installKind: options.installKind,
-      releaseNotes: "bootstrap verification recovery fixture",
-    })}\n`, { flag: "wx" }),
-    writeFile(path.join(stagingRoot, "current"), generation, { flag: "wx" }),
-  ]);
-  return Object.freeze({ generation, version });
-}
-
-/** 读取有界 JSONL，确认 production startup recovery 发布 verification 警告。 */
-async function hasVerificationRecoveryDiagnostic(diagnostics) {
-  const bytes = await readFile(diagnostics).catch(() => undefined);
-  if (!bytes) return false;
-  if (bytes.length <= 0 || bytes.length > MAX_DIAGNOSTICS_BYTES) throw new Error("bootstrap recovery diagnostics 大小无效");
-  const lines = bytes.toString("utf8").split("\n");
-  if (lines.at(-1) !== "") return false;
-  return lines.slice(0, -1).some((line) => {
-    let record;
-    try { record = JSON.parse(line); } catch { throw new Error("bootstrap recovery diagnostics JSONL 无效"); }
-    return record?.event === "transition-warning" && record.category === "verification";
-  });
-}
-
-/** 等待 pointer、generation 都清理且 verification recovery 诊断落盘。 */
-export async function observeBootstrapRecovery(statePaths, generation, options = {}) {
-  const deadline = Date.now() + (options.timeoutMilliseconds ?? 60_000);
-  const interval = options.pollMilliseconds ?? 100;
-  let remaining = "current pointer";
-  while (Date.now() < deadline) {
-    if (await lstat(path.join(statePaths.stagingRoot, "current")).catch(() => null)) {
-      remaining = "current pointer";
-    } else if (await lstat(path.join(statePaths.stagingRoot, generation)).catch(() => null)) {
-      remaining = "generation";
-    } else if (!await hasVerificationRecoveryDiagnostic(statePaths.diagnostics)) {
-      remaining = "verification diagnostic";
-    } else {
-      return;
-    }
-    await delay(interval);
-  }
-  throw new Error(`bootstrap candidate recovery 未清理或确认 ${remaining}`);
-}
-
-/** 只向原生应用和平台工具传公共系统环境。 */
-function selectEnvironment(environment) {
-  const names = [
-    "PATH", "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "PSModulePath", "OS",
-    "HOME", "USERPROFILE", "USERNAME", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA",
-    "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
-  ];
-  return Object.fromEntries(names.flatMap((name) => environment[name] === undefined ? [] : [[name, environment[name]]]));
-}
 
 /** 推导 Narrant 的 Tauri app-data/cache staging 边界。 */
 export function platformStatePaths(target, environment) {
@@ -260,22 +195,35 @@ async function findInstalledPids(target, installation, command, environment) {
 }
 
 /** 启动 exact installed app，并等待唯一 PID。 */
-async function launchInstalled(target, installation, command, environment) {
+async function launchInstalled(target, installation, command, environment, registerLaunch) {
   if ((await findInstalledPids(target, installation, command, environment)).length) throw new Error("Narrant 启动前已有同安装来源进程");
   // 直接启动 bundle 内的程序，使代理与 CA 文件仅由这一进程继承；不修改 LaunchServices 环境。
-  await new Promise((resolve, reject) => {
+  const launch = await new Promise((resolve, reject) => {
     const child = spawn(installation.executable, [], { env: environment, shell: false, windowsHide: false, stdio: "ignore", detached: false });
     child.once("error", reject);
-    child.once("spawn", resolve);
+    child.once("spawn", () => {
+      const owned = Object.freeze({ pid: child.pid, installation, child });
+      registerLaunch(owned);
+      resolve(owned);
+    });
   });
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const pids = await findInstalledPids(target, installation, command, environment);
-    if (pids.length === 1) return Object.freeze({ pid: pids[0], installation });
+    if (pids.length === 1 && pids[0] === launch.pid) return launch;
     if (pids.length > 1) throw new Error("exact Narrant process 不唯一");
     await delay(250);
   }
   throw new Error("installed Narrant 未在 deadline 内启动");
+}
+
+/** 等待已持有的子进程退出；枚举失败时仍不能遗留刚启动的测试应用。 */
+async function waitForOwnedChild(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("测试应用清理后未退出")), 5_000);
+    child.once("exit", () => { clearTimeout(timer); resolve(); });
+  });
 }
 
 /** 关闭唯一原生窗口，从而触发 production normal-exit shutdown/install。 */
@@ -323,12 +271,12 @@ async function compileMacCloseHelper(temporary, command, environment) {
   return output;
 }
 
-/** 创建 normal/bootstrap 共用的真实 macOS/Windows 平台适配器。 */
+/** 创建独立测试包的真实 macOS/Windows 平台适配器。 */
 export function createNativeUpdatePlatformAdapter(target, environment = process.env, dependencies = {}) {
   const contract = TARGETS[target];
   if (!contract) throw new Error(`不支持的 native target：${target ?? ""}`);
   const command = dependencies.runCommand ?? runBoundedCommand;
-  const commandEnvironment = selectEnvironment(environment);
+  const commandEnvironment = selectCommandEnvironment(environment);
   let temporary;
   let installation;
   let closeHelper;
@@ -446,6 +394,11 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
   async function cleanup() {
     const errors = [];
     for (const launch of launches.reverse()) {
+      if (launch.child.exitCode === null && launch.child.signalCode === null) {
+        if (target === "windows-x86_64") await command("taskkill.exe", ["/PID", String(launch.pid), "/T", "/F"], { environment: commandEnvironment }).catch((error) => errors.push(error));
+        else launch.child.kill("SIGKILL");
+        await waitForOwnedChild(launch.child).catch((error) => errors.push(error));
+      }
       const pids = await findInstalledPids(target, launch.installation, command, commandEnvironment).catch((error) => { errors.push(error); return []; });
       for (const pid of pids) {
         if (target === "windows-x86_64") await command("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { environment: commandEnvironment }).catch((error) => errors.push(error));
@@ -471,9 +424,7 @@ export function createNativeUpdatePlatformAdapter(target, environment = process.
     withCandidateGate,
     launch: async (stage = "baseline") => {
       await rm(path.join(statePaths.dataRoot, "upgrade-test-observation.json"), { force: true });
-      const launch = await launchInstalled(target, installation, command, { ...appEnvironment, NARRANT_UPGRADE_TEST_STAGE: stage });
-      launches.push(launch);
-      return launch;
+      return launchInstalled(target, installation, command, { ...appEnvironment, NARRANT_UPGRADE_TEST_STAGE: stage }, (launch) => launches.push(launch));
     },
     inspectPreservedData: (options) => observeData("candidate", options.version),
     waitForStaging,

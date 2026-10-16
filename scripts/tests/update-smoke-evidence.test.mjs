@@ -8,7 +8,6 @@ import test from "node:test";
 import { expectedDraftAssetNames } from "../public-draft-assets.mjs";
 import { UPDATE_TEST_PROFILE } from "../update-test-profile.mjs";
 import {
-  BOOTSTRAP_CHECKPOINTS,
   NORMAL_CHECKPOINTS,
   verifyUpdateSmokeEvidenceDirectory,
   verifyUpdateSmokeEvidenceDocument,
@@ -38,7 +37,7 @@ test("自托管双平台证据保留真实主机信息，仍拒绝错误平台�
   invalid.runner.os = "windows";
   assert.throws(() => verifyUpdateSmokeEvidenceDocument(invalid, expectations()), /runner.os/);
   invalid.runner = { os: "macos", arch: "aarch64", image: "unverified-image" };
-  assert.throws(() => verifyUpdateSmokeEvidenceDocument(invalid, expectations()), /runner.image/);
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument(invalid, expectations()), /runner/);
 });
 
 /** 生成固定八资产 receipt。 */
@@ -62,42 +61,40 @@ function receipt() {
 }
 
 /** 创建一个 promotion-eligible target document。 */
-function evidence(target, mode = "normal") {
+function evidenceBase(target) {
   const mac = target === "darwin-aarch64";
   return {
-    schemaVersion: 1,
-    evidenceKind: "real-native",
-    mode,
+    schemaVersion: 2,
+    evidenceKind: "isolated-native",
+    mode: "normal",
     target,
     runner: mac
-      ? { os: "macos", arch: "aarch64", image: "macos-15" }
-      : { os: "windows", arch: "x86_64", image: "windows-2025" },
+      ? { os: "macos", arch: "aarch64", image: "self-hosted", name: "fixture-mac", osVersion: "macOS", osRelease: "26.0.0" }
+      : { os: "windows", arch: "x86_64", image: "self-hosted", name: "fixture-windows", osVersion: "Windows", osRelease: "10.0.19045" },
     platform: mac
-      ? { packageKind: "app-tar-gz", installerKind: "dmg", installScope: "user", codeSigning: "verified", notarization: "verified" }
+      ? { packageKind: "app-tar-gz", installerKind: "dmg", installScope: "user", codeSigning: "ad-hoc-verified", notarization: "production-assets-only" }
       : { packageKind: "nsis-exe", installerKind: "nsis-exe", installScope: "current-user", registryRoot: "HKCU", msiPresent: false, authenticode: "not-required" },
     source: { repository: "XLCYun/narrant", tag: "v2.0.0", sha: sourceSha },
     candidate: { version: "2.0.0", publicReleaseId: 42, publicTag: "v2.0.0", manifestSha256: sha },
     updaterTrust: receipt().updaterTrust,
     draftReceipt: receipt(),
-    previousStable: mode === "bootstrap" ? null : {
+    previousStable: {
       tag: "v1.9.0", version: "1.9.0", manifestSha256: "c".repeat(64),
       packageSha256: mac ? "d".repeat(64) : "e".repeat(64),
       signatureSha256: mac ? "f".repeat(64) : "1".repeat(64),
       previousReleaseSigningKeySha256: "2".repeat(64),
-      packageUrl: `https://github.com/cyunlab/narrant/releases/download/v1.9.0/previous-${mac ? "mac" : "windows"}`,
+      packageUrl: `https://updates.cyunlab.com/narrant/releases/1.9.0/${target}/previous-package`,
     },
     startedAt: "2026-09-02T07:00:00.000Z",
     completedAt: "2026-09-02T07:10:00.000Z",
-    checkpoints: (mode === "bootstrap" ? BOOTSTRAP_CHECKPOINTS : NORMAL_CHECKPOINTS).map((id) => ({ id, status: "passed" })),
+    checkpoints: NORMAL_CHECKPOINTS.map((id) => ({ id, status: "passed" })),
   };
 }
 
 /** 返回固定 expectations。 */
-function expectations(mode = "normal") {
+function expectations() {
   return {
-    // 历史 schema 的回归只在测试中显式启用；发布 CLI 不接受这项选项。
-    allowLegacyEvidence: true,
-    mode,
+    mode: "normal",
     sourceTag: "v2.0.0",
     sourceSha,
     publicReleaseId: 42,
@@ -105,24 +102,18 @@ function expectations(mode = "normal") {
     version: "2.0.0",
     manifestSha256: sha,
     draftReceipt: receipt(),
-    previousTag: mode === "normal" ? "v1.9.0" : undefined,
-    previousManifestSha256: mode === "normal" ? "c".repeat(64) : undefined,
-    previousReleaseSigningKeySha256: mode === "normal" ? "2".repeat(64) : undefined,
-    allowBootstrap: mode === "bootstrap",
-    bootstrapTag: mode === "bootstrap" ? "v2.0.0" : undefined,
+    previousTag: "v1.9.0",
+    previousManifestSha256: "c".repeat(64),
+    previousReleaseSigningKeySha256: "2".repeat(64),
     maxAgeHours: 24,
     now,
   };
 }
 
 /** 构造隔离包实际升级与正式包静态核验分别绑定的证据。 */
-function isolatedEvidence(target) {
-  const document = evidence(target);
-  document.schemaVersion = 2;
-  document.evidenceKind = "isolated-native";
-  document.previousStable.packageUrl = `https://updates.cyunlab.com/narrant/releases/1.9.0/${target}/previous-package`;
+function evidence(target) {
+  const document = evidenceBase(target);
   const mac = target === "darwin-aarch64";
-  if (mac) Object.assign(document.platform, { codeSigning: "ad-hoc-verified", notarization: "production-assets-only" });
   document.testBuilds = {
     schemaVersion: 1, profile: UPDATE_TEST_PROFILE, target,
     recipeSha256: sha, updaterKeySha256: sha, manifestSha256: sha,
@@ -143,10 +134,10 @@ function isolatedEvidence(target) {
 }
 
 test("发布默认只接受隔离升级及正式包独立核验，预合并结果和旧证据不能冒充", () => {
-  const expected = { ...expectations(), allowLegacyEvidence: false };
-  const documents = ["darwin-aarch64", "windows-x86_64"].map(isolatedEvidence);
+  const expected = expectations();
+  const documents = ["darwin-aarch64", "windows-x86_64"].map(evidence);
   assert.equal(verifyUpdateSmokeEvidenceSet(documents, expected).evidenceKind, "isolated-native");
-  assert.throws(() => verifyUpdateSmokeEvidenceDocument(evidence("darwin-aarch64"), expected), /schema/);
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument({ ...evidence("darwin-aarch64"), schemaVersion: 1, evidenceKind: "real-native" }, expected), /schema/);
   for (const alter of [
     value => { value.evidenceKind = "isolated-native-preflight"; },
     value => { delete value.productionChecks; },
@@ -183,13 +174,7 @@ test("evidence 绑定两个 updater key identity，并只允许 normal bridge", 
   const mismatched = JSON.parse(JSON.stringify(bridged));
   mismatched.updaterTrust.releaseSigningKeySha256 = "f".repeat(64);
   assert.throws(() => verifyUpdateSmokeEvidenceDocument(mismatched, bridgedExpectations), /updater key identity/);
-  const bootstrap = evidence("darwin-aarch64", "bootstrap");
-  bootstrap.updaterTrust.candidateUpdaterKeySha256 = "e".repeat(64);
-  bootstrap.updaterTrust.bridgeAuthorized = true;
-  bootstrap.draftReceipt.updaterTrust = bootstrap.updaterTrust;
-  assert.throws(() => verifyUpdateSmokeEvidenceDocument(bootstrap, {
-    ...expectations("bootstrap"), draftReceipt: bootstrap.draftReceipt,
-  }), /bootstrap.*bridge/i);
+
 });
 
 test("evidence set 拒绝重复、缺少、额外目标与跨 target Draft 漂移", () => {
@@ -215,14 +200,9 @@ test("normal evidence 精确绑定 previous release key hash 且两 target 必�
   );
 });
 
-test("bootstrap 必须显式授权、匹配 protected tag 且没有 previous Stable", () => {
-  const bootstrap = evidence("darwin-aarch64", "bootstrap");
-  assert.doesNotThrow(() => verifyUpdateSmokeEvidenceDocument(bootstrap, expectations("bootstrap")));
-  assert.throws(() => verifyUpdateSmokeEvidenceDocument(bootstrap, { ...expectations("bootstrap"), allowBootstrap: false }), /未获一次性授权/);
-  assert.throws(() => verifyUpdateSmokeEvidenceDocument(bootstrap, { ...expectations("bootstrap"), bootstrapTag: "v1.0.0" }), /bootstrap tag/);
-  bootstrap.previousStable = evidence("darwin-aarch64").previousStable;
-  assert.throws(() => verifyUpdateSmokeEvidenceDocument(bootstrap, expectations("bootstrap")), /不得伪造/);
-  assert.throws(() => verifyUpdateSmokeEvidenceDocument(evidence("darwin-aarch64"), expectations("bootstrap")), /mode/);
+test("旧 bootstrap 模式不能获得当前发布资格", () => {
+  const bootstrap = { ...evidence("darwin-aarch64"), mode: "bootstrap", previousStable: null };
+  assert.throws(() => verifyUpdateSmokeEvidenceDocument(bootstrap, expectations()), /schema\/mode/);
 });
 
 test("freshness、future、checkpoint 和 source SHA 均 fail closed", () => {

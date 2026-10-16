@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { resolveOpenSsl } from './update-smoke-tools.mjs';
 
 // 共用现有 runner；在大型构建或系统变更前确认任务确实处于可用的桌面会话。
 assert.equal(process.env.RUNNER_ENVIRONMENT, 'self-hosted', 'Desktop CI requires a self-hosted runner');
@@ -20,6 +21,6 @@ if (process.argv.includes('--update-smoke')) {
 }
 if (process.argv.includes('--isolated-update-test')) {
   // 新驱动只操作测试身份，TLS 使用进程环境；不需要 sudo、hosts 或系统证书权限。
-  execFileSync('openssl', ['version'], { stdio: 'inherit' });
+  execFileSync(await resolveOpenSsl(), ['version'], { stdio: 'inherit' });
 }
 console.log('Self-hosted desktop prerequisites passed; the actual UI/lifecycle tests still follow.');

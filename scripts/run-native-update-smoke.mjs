@@ -80,8 +80,6 @@ export async function runNativeUpdateSmoke(options, environment = process.env) {
     previousTag: previous?.tag,
     previousManifestSha256: previous?.manifestSha256,
     previousReleaseSigningKeySha256,
-    allowBootstrap: options.mode === "bootstrap",
-    bootstrapTag: options.mode === "bootstrap" ? options.sourceTag : undefined,
     maxAgeHours: 24,
   });
   return { evidence, ...await writeUpdateSmokeEvidence(evidence, options.outputDirectory) };
@@ -99,7 +97,7 @@ function parseArguments(arguments_) {
   return values;
 }
 
-/** 解析 workflow 参数并运行当前 hosted target 的真实原生升级证据流程。 */
+/** 解析 workflow 参数并运行当前 self-hosted target 的真实原生升级证据流程。 */
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const result = await runNativeUpdateSmoke(options);
