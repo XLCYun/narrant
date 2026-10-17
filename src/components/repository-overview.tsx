@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { AlertCircleIcon, GitBranchIcon, GitPullRequestIcon, HistoryIcon, InformationCircleIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTranslation } from "react-i18next";
 import { BranchRelation, branchName } from "@/components/branch-relation";
 import type { DiscoveredPullRequest, PullRequestGroup, RepositoryReviewSummary } from "@/lib/review-types";
@@ -41,6 +42,16 @@ type PullRequestRow = {
   saved?: RepositoryReviewSummary;
   discovered?: DiscoveredPullRequest;
 };
+
+/** 仅控制当前概览中可见条目的生命周期筛选，不写入 Review 或 GitHub。 */
+type PullRequestStateFilter = "open" | "closed" | "merged" | "all";
+const pullRequestStateFilters: PullRequestStateFilter[] = ["open", "closed", "merged", "all"];
+
+/** 让筛选与行展示共用同一份元数据，在线发现结果优先于已保存的 Review。 */
+function rowMetadata(row: PullRequestRow) {
+  const savedSelection = row.saved?.selection.kind === "pull-request" ? row.saved.selection : undefined;
+  return row.discovered ?? savedSelection!.pullRequest;
+}
 
 /** 将 GitHub 时间转换为毫秒时间戳，并在旧缓存缺失或值无效时使用明确回退。 */
 function parseGitHubTimestamp(value?: string, fallback = 0) {
@@ -104,7 +115,11 @@ function mergePullRequests(reviews: RepositoryReviewSummary[], groups: PullReque
 /** Repository 的任务概览：缓存优先呈现 Pull Request，并隔离远端失败。 */
 export function RepositoryOverview(props: Props) {
   const { t, i18n } = useTranslation(["repository", "common", "github"]);
+  const [stateFilter, setStateFilter] = useState<PullRequestStateFilter>("open");
+  const filterId = useId();
+  const filterItems = pullRequestStateFilters.map((value) => ({ value, label: t(`repository:pullRequestFilter.${value}`) }));
   const rows = mergePullRequests(props.reviews, props.pullRequestGroups);
+  const visibleRows = rows.filter((row) => stateFilter === "all" || rowMetadata(row).state === stateFilter);
   const groupErrors = props.pullRequestGroups.flatMap((group) => group.error ? [group.error] : []);
   const hasSuccessfulGroup = props.pullRequestGroups.some((group) => !group.error);
   const hasPartialFailure = hasSuccessfulGroup && groupErrors.length > 0;
@@ -136,6 +151,17 @@ export function RepositoryOverview(props: Props) {
           <TabsTrigger value="history"><Icon icon={HistoryIcon} />{t("repository:tabs.history")}</TabsTrigger>
         </TabsList>
         <TabsContent value="pull-requests" className="mt-5">
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <label htmlFor={filterId} className="text-sm text-muted-foreground">{t("repository:pullRequestFilter.label")}</label>
+            <Select items={filterItems} value={stateFilter} onValueChange={(value) => { if (value) setStateFilter(value); }}>
+              <SelectTrigger id={filterId} aria-label={t("repository:pullRequestFilter.accessibleLabel")} size="sm" className="min-w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="start" alignItemWithTrigger={false}>
+                {filterItems.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
           {hasPartialFailure && <div className="mb-4 flex items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
             <Icon icon={AlertCircleIcon} className="mt-0.5 shrink-0" aria-hidden />
             <div className="min-w-0 flex-1 space-y-1">
@@ -149,10 +175,10 @@ export function RepositoryOverview(props: Props) {
           {props.discoveryError && rows.length > 0 && <div className="mb-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
             {props.discoveryError}；{t("repository:stale")}
           </div>}
-          {rows.length > 0 && <ul className="divide-y rounded-lg border">
-            {rows.map((row) => {
+          {visibleRows.length > 0 && <ul className="divide-y rounded-lg border">
+            {visibleRows.map((row) => {
               const savedSelection = row.saved?.selection.kind === "pull-request" ? row.saved.selection : undefined;
-              const metadata = row.discovered ?? savedSelection!.pullRequest;
+              const metadata = rowMetadata(row);
               const baseRef = row.discovered?.base.ref ?? savedSelection?.baseRef;
               const headRef = row.discovered?.head.ref ?? savedSelection?.headRef;
               const updated = Boolean(row.saved && row.discovered && (
@@ -183,6 +209,11 @@ export function RepositoryOverview(props: Props) {
               </li>;
             })}
           </ul>}
+          {rows.length > 0 && visibleRows.length === 0 && <PullRequestStatus
+            icon={InformationCircleIcon}
+            title={t("repository:pullRequestFilter.empty", { state: t(`repository:pullRequestFilter.${stateFilter}`) })}
+            description={t("repository:pullRequestFilter.emptyDescription")}
+          />}
           {rows.length === 0 && (!props.githubConnected
             ? <PullRequestStatus icon={GitPullRequestIcon} title={t("repository:connectForPrivate")} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
             : blockingDiscoveryError

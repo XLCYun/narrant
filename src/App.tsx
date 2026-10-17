@@ -421,6 +421,7 @@ export function App() {
     </article>}
     {selectedRepository && repositoryOverviewPresented && !snapshot && <article aria-label="Repository">
       <RepositoryOverview
+        key={selectedRepository.id}
         repositoryName={selectedRepository.canonicalPath.split(/[\\/]/).filter(Boolean).at(-1) ?? selectedRepository.canonicalPath}
         repositoryPath={selectedRepository.canonicalPath}
         reviews={repositoryReviews}
