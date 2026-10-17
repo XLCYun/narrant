@@ -252,6 +252,13 @@ impl JobTracker {
                 return Err(error);
             }
             if success == 0 || info.NumberOfProcessIdsInList < info.NumberOfAssignedProcesses {
+                #[cfg(test)]
+                eprintln!(
+                    "[DEBUG-job-snapshot] success={success} assigned={} listed={} capacity={}",
+                    info.NumberOfAssignedProcesses,
+                    info.NumberOfProcessIdsInList,
+                    buffer.len() - HEADER,
+                );
                 let capacity = (info.NumberOfAssignedProcesses as usize).max(buffer.len() * 2);
                 if capacity > MAX_PROCESSES {
                     return Err(io::Error::other(format!(

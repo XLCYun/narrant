@@ -80,13 +80,19 @@ fn native_windows_member_snapshot_tolerates_root_exit() {
         let mut command = Command::new(node_executable());
         command.args([
             "--eval",
-            "const { Worker } = require('node:worker_threads'); new Worker('', { eval: true });",
+            "globalThis.heap = Buffer.alloc(128 * 1024 * 1024, 1); const { Worker } = require('node:worker_threads'); new Worker('', { eval: true });",
         ]);
         let (mut pending, job) = WindowsJob::spawn_suspended(&mut command).unwrap();
         let child = pending.0.as_mut().unwrap();
         let observed = child.as_handle().try_clone_to_owned().unwrap();
         resume_initial_thread(child.id()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
+        if iteration % 2 == 0 {
+            // 覆盖 Host 收到终结后仍需强制回收的路径；另一半保留自然退出。
+            std::thread::sleep(Duration::from_millis(100));
+            job.terminate_and_wait()
+                .unwrap_or_else(|error| panic!("iteration {iteration}: {error}"));
+        }
         loop {
             job.tracker
                 .lock()
