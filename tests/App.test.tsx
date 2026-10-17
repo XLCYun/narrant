@@ -385,21 +385,16 @@ describe("App", () => {
     });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "/work/one" }));
-    const filter = await screen.findByRole("combobox", { name: "Pull Request 状态" });
-    expect(filter).toHaveTextContent("Open");
+    expect(await screen.findByRole("tab", { name: "Open", selected: true })).toBeVisible();
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryId: 1 }));
     const callsBefore = invoke.mock.calls.length;
-    fireEvent.click(filter);
-    const option = await screen.findByRole("option", { name: "All", exact: true });
-    fireEvent.pointerDown(option);
-    fireEvent.pointerUp(option);
-    fireEvent.click(option);
-    expect(filter).toHaveTextContent("All");
+    fireEvent.click(screen.getByRole("tab", { name: "All", exact: true }));
+    expect(screen.getByRole("tab", { name: "All", selected: true })).toBeVisible();
     expect(invoke.mock.calls).toHaveLength(callsBefore);
 
     fireEvent.click(screen.getByRole("button", { name: "打开仓库 two" }));
     await screen.findByRole("heading", { name: "two" });
-    expect(screen.getByRole("combobox", { name: "Pull Request 状态" })).toHaveTextContent("Open");
+    expect(screen.getByRole("tab", { name: "Open", selected: true })).toBeVisible();
   });
 
   it("选择发现的 Pull Request 会通过 durable reviewId 打开本地 Review", async () => {

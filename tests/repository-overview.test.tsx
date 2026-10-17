@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { RepositoryOverview, type PullRequestGroup } from "@/components/repository-overview";
 import { i18n } from "@/lib/i18n";
@@ -84,13 +84,10 @@ function renderOverview(options: {
   };
 }
 
-/** 通过实际 Select 选项切换状态，覆盖与用户相同的交互入口。 */
+/** 通过可见的状态标签切换筛选，覆盖与用户相同的交互入口。 */
 async function selectState(name: "Open" | "Closed" | "Merged" | "All", label = "Pull Request 状态") {
-  fireEvent.click(screen.getByRole("combobox", { name: label }));
-  const option = await screen.findByRole("option", { name, exact: true });
-  fireEvent.pointerDown(option);
-  fireEvent.pointerUp(option);
-  fireEvent.click(option);
+  const filters = screen.getByRole("tablist", { name: label });
+  fireEvent.click(within(filters).getByRole("tab", { name, exact: true }));
 }
 
 /** 为离线筛选构造独立 Review，保留与在线条目相同的生命周期状态。 */
@@ -113,7 +110,9 @@ describe("RepositoryOverview", () => {
     expect(screen.getByRole("tab", { name: "Pull Requests" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "本地分支" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "审核历史" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Pull Request 状态" })).toHaveTextContent("Open");
+    const filters = screen.getByRole("tablist", { name: "Pull Request 状态" });
+    expect(within(filters).getAllByRole("tab")).toHaveLength(4);
+    expect(within(filters).getByRole("tab", { selected: true })).toHaveTextContent("Open");
   });
 
   it.each(["online", "saved"])("%s 条目统一按四种状态筛选，Draft 仅在未关闭时归入 Open", async (source) => {
@@ -185,15 +184,15 @@ describe("RepositoryOverview", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新尝试" }));
     expect(onRetryDiscovery).toHaveBeenCalledOnce();
     rerender({ pullRequestGroups: [group, failedGroup], discoveryLoading: true });
-    expect(screen.getByRole("combobox", { name: "Pull Request 状态" })).toHaveTextContent("Merged");
+    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
     rerender({ pullRequestGroups: [group], discoveryError: "offline" });
-    expect(screen.getByRole("combobox", { name: "Pull Request 状态" })).toHaveTextContent("Merged");
+    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
     rerender({ pullRequestGroups: [{ ...group, pullRequests: [{ ...pullRequest, state: "merged" }] }] });
-    expect(screen.getByRole("combobox", { name: "Pull Request 状态" })).toHaveTextContent("Merged");
+    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
     expect(screen.getByRole("button", { name: /继续审核/ })).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "本地分支" }));
     fireEvent.click(screen.getByRole("tab", { name: "Pull Requests" }));
-    expect(screen.getByRole("combobox", { name: "Pull Request 状态" })).toHaveTextContent("Merged");
+    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
   });
 
   it("从审核历史整行继续 Review", () => {

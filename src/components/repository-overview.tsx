@@ -1,9 +1,8 @@
-import { useId, useState, type ReactNode } from "react";
-import { AlertCircleIcon, GitBranchIcon, GitPullRequestIcon, HistoryIcon, InformationCircleIcon } from "@hugeicons/core-free-icons";
+import { useState, type ReactNode } from "react";
+import { AlertCircleIcon, GitBranchIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestIcon, HistoryIcon, InformationCircleIcon, ListViewIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTranslation } from "react-i18next";
 import { BranchRelation, branchName } from "@/components/branch-relation";
 import type { DiscoveredPullRequest, PullRequestGroup, RepositoryReviewSummary } from "@/lib/review-types";
@@ -45,7 +44,13 @@ type PullRequestRow = {
 
 /** 仅控制当前概览中可见条目的生命周期筛选，不写入 Review 或 GitHub。 */
 type PullRequestStateFilter = "open" | "closed" | "merged" | "all";
-const pullRequestStateFilters: PullRequestStateFilter[] = ["open", "closed", "merged", "all"];
+/** 四态筛选各自使用对应的 PR 生命周期图标，All 使用完整列表图标。 */
+const pullRequestStateFilters = [
+  { value: "open", icon: GitPullRequestIcon },
+  { value: "closed", icon: GitPullRequestClosedIcon },
+  { value: "merged", icon: GitMergeIcon },
+  { value: "all", icon: ListViewIcon },
+] as const;
 
 /** 让筛选与行展示共用同一份元数据，在线发现结果优先于已保存的 Review。 */
 function rowMetadata(row: PullRequestRow) {
@@ -116,8 +121,6 @@ function mergePullRequests(reviews: RepositoryReviewSummary[], groups: PullReque
 export function RepositoryOverview(props: Props) {
   const { t, i18n } = useTranslation(["repository", "common", "github"]);
   const [stateFilter, setStateFilter] = useState<PullRequestStateFilter>("open");
-  const filterId = useId();
-  const filterItems = pullRequestStateFilters.map((value) => ({ value, label: t(`repository:pullRequestFilter.${value}`) }));
   const rows = mergePullRequests(props.reviews, props.pullRequestGroups);
   const visibleRows = rows.filter((row) => stateFilter === "all" || rowMetadata(row).state === stateFilter);
   const groupErrors = props.pullRequestGroups.flatMap((group) => group.error ? [group.error] : []);
@@ -151,74 +154,80 @@ export function RepositoryOverview(props: Props) {
           <TabsTrigger value="history"><Icon icon={HistoryIcon} />{t("repository:tabs.history")}</TabsTrigger>
         </TabsList>
         <TabsContent value="pull-requests" className="mt-5">
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <label htmlFor={filterId} className="text-sm text-muted-foreground">{t("repository:pullRequestFilter.label")}</label>
-            <Select items={filterItems} value={stateFilter} onValueChange={(value) => { if (value) setStateFilter(value); }}>
-              <SelectTrigger id={filterId} aria-label={t("repository:pullRequestFilter.accessibleLabel")} size="sm" className="min-w-36">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="start" alignItemWithTrigger={false}>
-                {filterItems.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          {hasPartialFailure && <div className="mb-4 flex items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-            <Icon icon={AlertCircleIcon} className="mt-0.5 shrink-0" aria-hidden />
-            <div className="min-w-0 flex-1 space-y-1">
-              {props.pullRequestGroups.filter((group) => group.error).map((group) => {
-                const identity = `${group.repository.owner}/${group.repository.name}`;
-                return <p key={identity}>{t("repository:partialFailure", { repository: identity, error: group.error })}</p>;
-              })}
+          <Tabs value={stateFilter} onValueChange={(value) => setStateFilter(value as PullRequestStateFilter)} className="gap-0 rounded-lg border">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b p-3 sm:p-4">
+              <span className="text-sm text-muted-foreground">{t("repository:pullRequestFilter.label")}</span>
+              <TabsList aria-label={t("repository:pullRequestFilter.accessibleLabel")} className="max-w-full">
+                {pullRequestStateFilters.map(({ value, icon }) => <TabsTrigger
+                  key={value}
+                  value={value}
+                  className="rounded-full data-active:border-primary/20 data-active:bg-primary/10 data-active:text-primary dark:data-active:border-emerald-300/25 dark:data-active:bg-emerald-500/15 dark:data-active:text-emerald-300"
+                >
+                  <Icon icon={icon} aria-hidden />
+                  {t(`repository:pullRequestFilter.${value}`)}
+                </TabsTrigger>)}
+              </TabsList>
             </div>
-            <Button size="sm" variant="outline" onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>
-          </div>}
-          {props.discoveryError && rows.length > 0 && <div className="mb-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-            {props.discoveryError}；{t("repository:stale")}
-          </div>}
-          {visibleRows.length > 0 && <ul className="divide-y rounded-lg border">
-            {visibleRows.map((row) => {
-              const savedSelection = row.saved?.selection.kind === "pull-request" ? row.saved.selection : undefined;
-              const metadata = rowMetadata(row);
-              const baseRef = row.discovered?.base.ref ?? savedSelection?.baseRef;
-              const headRef = row.discovered?.head.ref ?? savedSelection?.headRef;
-              const updated = Boolean(row.saved && row.discovered && (
-                row.saved.currentSnapshot.baseRevision !== row.discovered.base.sha
-                || row.saved.currentSnapshot.headRevision !== row.discovered.head.sha
-              ));
-              const githubUpdatedAt = row.discovered?.githubUpdatedAt ?? savedSelection?.pullRequest.githubUpdatedAt;
-              const opening = props.openingReviewKey === row.key;
-              return <li key={row.key} className="flex flex-col items-stretch gap-3 p-4 sm:flex-row sm:items-center sm:gap-4">
-                <Icon icon={GitPullRequestIcon} className="hidden shrink-0 text-muted-foreground sm:block" aria-hidden />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="truncate font-medium">#{metadata.number} {metadata.title}</p>
-                    {showRepositoryIdentity && <Badge variant="outline">{row.repository.owner}/{row.repository.name}</Badge>}
-                    {metadata.isDraft && <Badge variant="secondary">{t("repository:draft")}</Badge>}
-                    {updated && <Badge>{t("repository:updateAvailable")}</Badge>}
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span>{metadata.authorUsername}</span><span>{metadata.state}</span>
-                    {baseRef && headRef && <BranchRelation baseRef={baseRef} headRef={headRef} />}
-                    {githubUpdatedAt && <time dateTime={githubUpdatedAt}>{formatRelativeTime(rowUpdatedAt(row), Date.now(), locale)}</time>}
-                  </div>
+            <TabsContent value={stateFilter}>
+              {hasPartialFailure && <div className="m-4 flex items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
+                <Icon icon={AlertCircleIcon} className="mt-0.5 shrink-0" aria-hidden />
+                <div className="min-w-0 flex-1 space-y-1">
+                  {props.pullRequestGroups.filter((group) => group.error).map((group) => {
+                    const identity = `${group.repository.owner}/${group.repository.name}`;
+                    return <p key={identity}>{t("repository:partialFailure", { repository: identity, error: group.error })}</p>;
+                  })}
                 </div>
-                <Button className="self-start sm:self-auto" aria-label={`${opening ? t("common:openingReview") : row.saved ? t("common:continueReview") : t("common:startReview")} #${metadata.number} ${metadata.title}`} aria-busy={opening || undefined} disabled={props.reviewNavigationBusy} variant={row.saved ? "outline" : "default"} onClick={() => {
-                  if (row.saved) props.onOpenReview(row.saved);
-                  else if (row.discovered) props.onOpenPullRequest(row.repository, row.discovered);
-                }}>{opening && <Spinner aria-hidden />}{row.saved ? t("common:continueReview") : t("common:startReview")}</Button>
-              </li>;
-            })}
-          </ul>}
-          {rows.length > 0 && visibleRows.length === 0 && <PullRequestStatus
-            icon={InformationCircleIcon}
-            title={t("repository:pullRequestFilter.empty", { state: t(`repository:pullRequestFilter.${stateFilter}`) })}
-            description={t("repository:pullRequestFilter.emptyDescription")}
-          />}
-          {rows.length === 0 && (!props.githubConnected
-            ? <PullRequestStatus icon={GitPullRequestIcon} title={t("repository:connectForPrivate")} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
-            : blockingDiscoveryError
-              ? <PullRequestStatus icon={AlertCircleIcon} title={t("repository:loadFailed")} description={blockingDiscoveryError} action={<Button variant="outline" onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>} />
-              : <PullRequestStatus icon={InformationCircleIcon} title={t("repository:noPullRequests")} description={t("repository:noPullRequestsDescription")} />)}
+                <Button size="sm" variant="outline" onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>
+              </div>}
+              {props.discoveryError && rows.length > 0 && <div className="m-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
+                {props.discoveryError}；{t("repository:stale")}
+              </div>}
+              {visibleRows.length > 0 && <ul className="divide-y">
+                {visibleRows.map((row) => {
+                  const savedSelection = row.saved?.selection.kind === "pull-request" ? row.saved.selection : undefined;
+                  const metadata = rowMetadata(row);
+                  const baseRef = row.discovered?.base.ref ?? savedSelection?.baseRef;
+                  const headRef = row.discovered?.head.ref ?? savedSelection?.headRef;
+                  const updated = Boolean(row.saved && row.discovered && (
+                    row.saved.currentSnapshot.baseRevision !== row.discovered.base.sha
+                    || row.saved.currentSnapshot.headRevision !== row.discovered.head.sha
+                  ));
+                  const githubUpdatedAt = row.discovered?.githubUpdatedAt ?? savedSelection?.pullRequest.githubUpdatedAt;
+                  const opening = props.openingReviewKey === row.key;
+                  return <li key={row.key} className="flex flex-col items-stretch gap-3 p-4 sm:flex-row sm:items-center sm:gap-4">
+                    <Icon icon={GitPullRequestIcon} className="hidden shrink-0 text-muted-foreground sm:block" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate font-medium">#{metadata.number} {metadata.title}</p>
+                        {showRepositoryIdentity && <Badge variant="outline">{row.repository.owner}/{row.repository.name}</Badge>}
+                        {metadata.isDraft && <Badge variant="secondary">{t("repository:draft")}</Badge>}
+                        {updated && <Badge>{t("repository:updateAvailable")}</Badge>}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span>{metadata.authorUsername}</span><span>{metadata.state}</span>
+                        {baseRef && headRef && <BranchRelation baseRef={baseRef} headRef={headRef} />}
+                        {githubUpdatedAt && <time dateTime={githubUpdatedAt}>{formatRelativeTime(rowUpdatedAt(row), Date.now(), locale)}</time>}
+                      </div>
+                    </div>
+                    <Button className="self-start sm:self-auto" aria-label={`${opening ? t("common:openingReview") : row.saved ? t("common:continueReview") : t("common:startReview")} #${metadata.number} ${metadata.title}`} aria-busy={opening || undefined} disabled={props.reviewNavigationBusy} variant={row.saved ? "outline" : "default"} onClick={() => {
+                      if (row.saved) props.onOpenReview(row.saved);
+                      else if (row.discovered) props.onOpenPullRequest(row.repository, row.discovered);
+                    }}>{opening && <Spinner aria-hidden />}{row.saved ? t("common:continueReview") : t("common:startReview")}</Button>
+                  </li>;
+                })}
+              </ul>}
+              {rows.length > 0 && visibleRows.length === 0 && <PullRequestStatus
+                icon={InformationCircleIcon}
+                title={t("repository:pullRequestFilter.empty", { state: t(`repository:pullRequestFilter.${stateFilter}`) })}
+                description={t("repository:pullRequestFilter.emptyDescription")}
+              />}
+              {rows.length === 0 && (!props.githubConnected
+                ? <PullRequestStatus icon={GitPullRequestIcon} title={t("repository:connectForPrivate")} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
+                : blockingDiscoveryError
+                  ? <PullRequestStatus icon={AlertCircleIcon} title={t("repository:loadFailed")} description={blockingDiscoveryError} action={<Button variant="outline" onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>} />
+                  : <PullRequestStatus icon={InformationCircleIcon} title={t("repository:noPullRequests")} description={t("repository:noPullRequestsDescription")} />)}
+            </TabsContent>
+          </Tabs>
         </TabsContent>
         <TabsContent value="branches" className="mt-5">{props.localBranches}</TabsContent>
         <TabsContent value="history" className="mt-5">
