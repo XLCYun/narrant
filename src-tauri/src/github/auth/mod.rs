@@ -8,9 +8,9 @@ use secrecy::SecretString;
 use serde::Serialize;
 
 pub use credential_store::CredentialStore;
-#[cfg(feature = "test-isolation")]
+#[cfg(feature = "wdio")]
 pub use credential_store::EphemeralCredentialStore;
-#[cfg(not(feature = "test-isolation"))]
+#[cfg(not(feature = "wdio"))]
 pub use credential_store::SystemCredentialStore;
 pub use identity::FileGitHubIdentityProvider;
 pub use oauth_client::{OAuthClient, OctocrabOAuthClient};

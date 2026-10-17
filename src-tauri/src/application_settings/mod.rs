@@ -22,6 +22,6 @@ pub(crate) use model::{
 #[path = "tests/contract.rs"]
 mod tests;
 
-#[cfg(all(test, debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(test, debug_assertions, not(feature = "wdio")))]
 #[path = "tests/development_credential.rs"]
 mod development_credential_tests;

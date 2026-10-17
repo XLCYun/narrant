@@ -1,33 +1,33 @@
 //! Custom Built-in Agent Provider 使用的设备级凭据适配器。
 
-#[cfg(not(feature = "test-isolation"))]
+#[cfg(not(feature = "wdio"))]
 use keyring::Entry;
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 use serde::{Deserialize, Serialize};
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 use std::io::Write;
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "test-isolation")]
+#[cfg(feature = "wdio")]
 mod ephemeral;
-#[cfg(feature = "test-isolation")]
+#[cfg(feature = "wdio")]
 use ephemeral::EphemeralCustomCredentialAdapter;
 
 /// Custom 模型服务凭据在操作系统凭据管理器中的固定服务名。
-#[cfg(not(feature = "test-isolation"))]
+#[cfg(not(feature = "wdio"))]
 const CREDENTIAL_SERVICE: &str = "com.cyunlab.narrant.custom-provider";
 
 /// Custom 模型服务使用的单一凭据槽位。
-#[cfg(not(feature = "test-isolation"))]
+#[cfg(not(feature = "wdio"))]
 const CREDENTIAL_ACCOUNT: &str = "model-service";
 
 /// Debug 构建使用的本地凭据文件名；与 settings.json 同目录且不进入仓库。
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 const DEVELOPMENT_CREDENTIAL_FILE: &str = "custom-provider-credential.dev.json";
 
 /// 显式允许 Debug 构建从钥匙串执行一次迁移的环境变量。
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 const DEVELOPMENT_KEYCHAIN_IMPORT_ENV: &str = "NARRANT_DEV_IMPORT_CUSTOM_PROVIDER_KEYCHAIN";
 
 /// Application Settings 依赖的凭据边界，便于测试注入内存实现。
@@ -43,10 +43,10 @@ pub(crate) trait CustomCredentialAdapter: Send + Sync {
 }
 
 /// 使用当前操作系统安全凭据存储保存 Custom API key。
-#[cfg(not(feature = "test-isolation"))]
+#[cfg(not(feature = "wdio"))]
 pub(crate) struct SystemCustomCredentialAdapter;
 
-#[cfg(not(feature = "test-isolation"))]
+#[cfg(not(feature = "wdio"))]
 impl CustomCredentialAdapter for SystemCustomCredentialAdapter {
     /// 从钥匙串或平台凭据管理器读取 API key。
     fn load(&self) -> Result<Option<String>, String> {
@@ -80,7 +80,7 @@ impl CustomCredentialAdapter for SystemCustomCredentialAdapter {
 }
 
 /// Debug 构建的本地凭据文档；`null` 明确表示用户已删除开发凭据。
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DevelopmentCredentialDocument {
@@ -89,14 +89,14 @@ struct DevelopmentCredentialDocument {
 }
 
 /// Debug 构建的明文本地凭据适配器，避免日常开发反复触发系统钥匙串授权。
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 pub(super) struct DevelopmentCustomCredentialAdapter {
     path: PathBuf,
     keychain: std::sync::Arc<dyn CustomCredentialAdapter>,
     import_from_keychain: bool,
 }
 
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 impl DevelopmentCustomCredentialAdapter {
     /// 从 settings 路径派生本地凭据路径，并保存显式的一次性迁移策略。
     pub(super) fn new(
@@ -158,7 +158,7 @@ impl DevelopmentCustomCredentialAdapter {
     }
 }
 
-#[cfg(all(debug_assertions, not(feature = "test-isolation")))]
+#[cfg(all(debug_assertions, not(feature = "wdio")))]
 impl CustomCredentialAdapter for DevelopmentCustomCredentialAdapter {
     /// 本地文档存在时绝不访问钥匙串；缺失时也仅在显式迁移开关下访问一次。
     fn load(&self) -> Result<Option<String>, String> {
@@ -181,7 +181,7 @@ impl CustomCredentialAdapter for DevelopmentCustomCredentialAdapter {
 }
 
 /// Release 构建使用系统凭据管理器，不读取开发文件或迁移环境变量。
-#[cfg(all(not(feature = "test-isolation"), not(debug_assertions)))]
+#[cfg(all(not(feature = "wdio"), not(debug_assertions)))]
 pub(crate) fn default_custom_credential_adapter(
     _settings_path: &std::path::Path,
 ) -> std::sync::Arc<dyn CustomCredentialAdapter> {
@@ -189,7 +189,7 @@ pub(crate) fn default_custom_credential_adapter(
 }
 
 /// Debug 构建使用 settings 同目录的本地文件，并仅接受显式的一次性钥匙串迁移。
-#[cfg(all(not(feature = "test-isolation"), debug_assertions))]
+#[cfg(all(not(feature = "wdio"), debug_assertions))]
 pub(crate) fn default_custom_credential_adapter(
     settings_path: &std::path::Path,
 ) -> std::sync::Arc<dyn CustomCredentialAdapter> {
@@ -203,7 +203,7 @@ pub(crate) fn default_custom_credential_adapter(
 }
 
 /// 构造隔离于用户钥匙串的 E2E 凭据适配器。
-#[cfg(feature = "test-isolation")]
+#[cfg(feature = "wdio")]
 pub(crate) fn default_custom_credential_adapter(
     _settings_path: &std::path::Path,
 ) -> std::sync::Arc<dyn CustomCredentialAdapter> {

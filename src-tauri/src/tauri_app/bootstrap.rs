@@ -20,7 +20,7 @@ use github_commands::github_api_base_url;
 pub fn run() {
     let context = tauri::generate_context!();
     // 界面测试在任何用户目录或插件初始化前检查独立应用身份。
-    #[cfg(feature = "test-isolation")]
+    #[cfg(feature = "wdio")]
     assert_eq!(
         context.config().identifier,
         "com.cyunlab.narrant.e2e",
@@ -86,11 +86,11 @@ pub fn run() {
                 option_env!("NARRANT_GITHUB_APP_SLUG").unwrap_or_default(),
                 oauth_client,
                 {
-                    #[cfg(feature = "test-isolation")]
+                    #[cfg(feature = "wdio")]
                     {
                         Arc::new(github::EphemeralCredentialStore::default())
                     }
-                    #[cfg(not(feature = "test-isolation"))]
+                    #[cfg(not(feature = "wdio"))]
                     {
                         Arc::new(github::SystemCredentialStore)
                     }
