@@ -138,12 +138,6 @@ impl ProcessTree {
     ) -> io::Result<bool> {
         windows_validation::contains(&self.job, process)
     }
-
-    /// 批次测试显式采样账本；清理返回时不自动采样或补等。
-    #[cfg(all(test, windows))]
-    pub(crate) fn windows_owner_snapshot(&self) -> io::Result<windows_validation::OwnerSnapshot> {
-        windows_validation::snapshot(&self.job)
-    }
 }
 
 impl Drop for ProcessTree {

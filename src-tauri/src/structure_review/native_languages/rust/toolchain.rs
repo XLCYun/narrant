@@ -16,7 +16,7 @@ pub(super) struct RustToolchain {
     pub sysroot: Option<PathBuf>,
     pub sources: Option<PathBuf>,
     pub path: OsString,
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub manifests: Vec<PathBuf>,
 }
 
@@ -89,7 +89,7 @@ impl RustToolchain {
             }
         }
         let resolved = resolved.ok_or_else(|| failure("没有可检查的 Rust 项目"))?;
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         let resolved = Self {
             manifests,
             ..resolved
@@ -134,7 +134,7 @@ impl RustToolchain {
                 sysroot: None,
                 sources: None,
                 path,
-                #[cfg(test)]
+                #[cfg(all(test, unix))]
                 manifests: vec![],
             });
         }
@@ -146,7 +146,7 @@ impl RustToolchain {
             sysroot: Some(root),
             sources: Some(sources),
             path,
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             manifests: vec![],
         })
     }

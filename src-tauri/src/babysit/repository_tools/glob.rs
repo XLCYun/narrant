@@ -121,7 +121,7 @@ fn compile_segment(segment: &str) -> String {
 }
 
 /// 测试模式匹配边界，不需要在文件系统中创建不可表示的路径。
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) fn matches_pattern_for_test(
     pattern: &str,
     path: &Path,

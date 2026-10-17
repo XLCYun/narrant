@@ -1,6 +1,6 @@
 use super::credential::{default_custom_credential_adapter, CustomCredentialAdapter};
 use super::custom_connection::{CustomProviderConnection, CustomProviderSettings};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use super::model::BabysitModelPreference;
 use super::model::{
     ApplicationLanguage, ApplicationSettings, BabysitProvider, BabysitProviderSettings,
@@ -340,7 +340,7 @@ impl ApplicationSettingsApplication {
     }
 
     /// 将 Codex runtime 的模型投影写回完整 provider 配置，同时保留 executable。
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn update_babysit_model(
         &self,
         preference: BabysitModelPreference,
