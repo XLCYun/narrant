@@ -105,7 +105,9 @@ impl ProcessTree {
             #[cfg(unix)]
             {
                 self.group.snapshot();
-                self.group.terminate();
+                if let Err(error) = self.group.terminate() {
+                    self.failure.get_or_insert(error);
+                }
             }
             #[cfg(windows)]
             let tree_result = self.job.terminate_and_wait();
@@ -135,12 +137,6 @@ impl ProcessTree {
         process: &std::os::windows::io::OwnedHandle,
     ) -> io::Result<bool> {
         windows_validation::contains(&self.job, process)
-    }
-
-    /// 批次测试显式采样账本；清理返回时不自动采样或补等。
-    #[cfg(all(test, windows))]
-    pub(crate) fn windows_owner_snapshot(&self) -> io::Result<windows_validation::OwnerSnapshot> {
-        windows_validation::snapshot(&self.job)
     }
 }
 
@@ -175,4 +171,42 @@ pub(crate) fn configure_tokio_command(command: &mut tokio::process::Command) {
     command.creation_flags(CREATE_NO_WINDOW);
     #[cfg(not(windows))]
     let _ = command;
+}
+
+/// 当前一次性 helper 的专属隔离域；保留外层 Host 所有权，不生成脱离外层的 worker。
+#[allow(dead_code)] // 独立 Rust helper 直接复用，宿主只使用 ProcessTree。
+pub(crate) struct CurrentProcessDomain {
+    #[cfg(unix)]
+    group: unix_group::ProcessGroup,
+    #[cfg(windows)]
+    job: windows_job::CurrentProcessJob,
+}
+
+#[allow(dead_code)]
+impl CurrentProcessDomain {
+    /// ready 之前建立专属域；失败时不能开始原生分析或终止继承的 shell 域。
+    pub(crate) fn establish() -> io::Result<Self> {
+        Ok(Self {
+            #[cfg(unix)]
+            group: unix_group::ProcessGroup::current()?,
+            #[cfg(windows)]
+            job: windows_job::CurrentProcessJob::attach()?,
+        })
+    }
+
+    /// 只用于不可协作后端的 cancel/EOF；终止自身和所有后代，不声称自己已等待退出。
+    pub(crate) fn terminate(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        self.group.terminate()?;
+        #[cfg(windows)]
+        self.job.terminate()?;
+        Ok(())
+    }
+
+    /// 原生工作已结束才允许正常 exit 0；Windows 不在关闭自身 Job 时重新杀死当前进程。
+    pub(crate) fn completed(&self) -> io::Result<()> {
+        #[cfg(windows)]
+        self.job.completed()?;
+        Ok(())
+    }
 }

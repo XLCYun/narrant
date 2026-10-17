@@ -12,7 +12,7 @@ use std::{
 /// 旧配置补默认值，三个档位均可独立保存，并保留其它偏好。
 #[test]
 fn rust_dependency_scope_defaults_and_round_trips_without_overwriting_settings() {
-    use crate::structure_review::rust_analyzer::RustDependencyScope;
+    use crate::structure_review::code_graph::RustDependencyScope;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
     let application = ApplicationSettingsApplication::new(path.clone());

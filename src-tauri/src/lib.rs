@@ -5,7 +5,6 @@ mod child_process;
 mod core_git;
 mod github;
 mod language_support;
-pub mod lsp;
 mod operation;
 mod persistence;
 mod repository;

@@ -1,5 +1,62 @@
 # Application Update 验收记录
 
+当前按 [ADR-0036](./adr/0036-use-one-public-github-repository-for-distribution.md) 恢复 GitHub-hosted
+macOS ARM64 / Windows x64 正式包验收，macOS 升级暂停已解除。
+当前执行规则见 [规格](./specs/0017-application-updates.md) 和 [运维文档](./application-update-operations.md)。
+以下保留历史失败和成功范围，不将 self-hosted 独立包结果当作当前正式包升级通过。
+
+## 2026-10-16 隔离旧版升级首次实测
+
+本机 macOS ARM64 的两个真实测试包分别取自上一 Stable `v1.2.14`
+（`5f0018fe5b5a95533d4f67d6cfa261b8f8fa26cd`）与候选源码
+`69b4926957e7cdda5f692d7df748f73af3c53b7b`。候选仅将测试版本标为 `1.2.15`。
+两个包使用独立应用身份、临时 updater 密钥和 ad-hoc 代码签名；未修改旧版更新器实现。
+
+- 两份包均构建、签名并通过字节验签。旧版实际安装、启动，写入独立项目/主题/语言夹具，
+  并通过进程级 TLS 读取到 `1.2.15` manifest；未修改 hosts 或系统证书信任。
+- **升级失败，不能计为通过。** 旧版在发出包下载请求前报告 manifest 失败；驱动最终以
+  `TLS gate 等待升级请求超时` 退出。日志中的检查编号为 1、下载失败编号为 2。
+  失败后测试进程、独立数据/cache 目录及临时安装目录均已清理。
+- 原因是 `check_stable` 把检查编号保存到 `PendingUpdate`，而核心为下载另分配编号，
+  `download_pending` 因编号不同拒绝可信候选。该缺陷也存在于上一 Stable 源码。
+- 新增 `automatic_download_binds_the_approved_download_identity` 先复现 `None`，
+  修复后通过。运行时改为在转换锁内按核心批准的 `StartDownload` 绑定候选与下载编号，
+  自动重试同时重绑。更新模块聚焦回归共 **92 通过、0 失败、0 忽略**，另覆盖旧重试编号
+  和不同候选不能复用绑定；未将单元测试视为真实安装验收。
+
+新代码不能修复用户已经安装的 `v1.2.14`。当前上一 Stable→候选的发布验收仍未通过；
+修复版需要一次人工安装过渡。用户随后决定暂停 macOS 升级验收，仅继续 Windows 升级测试。
+Windows 使用修复后的同一源码构建两个独立测试版本，结果标为
+`same-source-version-regression`，不能替代上一 Stable 的失败。
+macOS 的普通质量检查与 E2E 继续执行；正式发布的双平台升级门禁不因此豁免。
+本轮未发布正式版本或修改 Stable。
+
+### Windows 安装器格式回归
+
+Windows 同源测试的 [run 38885635994](https://github.com/XLCYun/narrant/actions/runs/38885635994)
+成功构建并签名 `1.2.14`、`1.2.15` 两份独立包，也完成真实下载和 durable staging，
+但正常退出后安装记录没有变成新版本，4 分钟轮询失败，不能计为升级通过。
+
+排查发现安装入口错误地要求 NSIS loader 自身为 AMD64。只读检查已发布的
+`Narrant_1.2.14_x64-setup.exe` 得到 PE machine `0x014c`（I386），SHA-256 为
+`36728f9201ef79151dcd9321dd00f0f7412d2487aed7488bdea3245b6954a4d4`。
+新增 handoff 回归先以“应用更新包不是 Windows x64 PE”失败；修复允许 I386/AMD64 loader，
+应用安装计划仍限定 Windows x64，并保留包签名与暂存复验。修复后更新模块 **93 项通过**，
+脚本回归 **243 项通过、2 项跳过**。
+
+[修复重跑 38893235149](https://github.com/XLCYun/narrant/actions/runs/38893235149) 已成功：
+同一源码 `d54b43e8e8d4572103c96a4a5dc1b5a9ab741e0e` 的 `1.2.14`→`1.2.15` 独立测试包
+完成安装、下载、验签、暂存、正常退出安装、原路径替换、不自动重启、手动启动及项目/设置保留。
+全部 15 项检查点通过；运行后独立核对测试安装记录、数据、缓存和进程均已清理，原 runner 在线空闲。
+该结果仍为 `same-source-version-regression`，不改变上一 Stable 的失败结论或 macOS 升级暂停决定。
+
+该次 Artifact 上传还因 GitHub 存储额度已满而失败。分支试运行改为额外在现有 runner
+保存测试包与诊断，并在清理前记录测试专属日志、版本记录和进程退出状态；上传失败不能
+覆盖功能测试失败，正式发布的证据上传要求不变。本次成功运行的上传同样因额度失败，副本位于
+Windows runner 的 `C:\ci\runners\narrant\_work\_tool\narrant-update-preflight\38893235149-1`。
+
+## 历史验收范围（2026-09）
+
 本记录对应 [`0017-application-updates.md`](./specs/0017-application-updates.md) 的 15 条验收标准。
 它区分可在本机确定性执行的证据、必须由应用内浏览器采集的证据，以及只能在 GitHub 托管
 runner 上产生的真实原生升级证据。除特别注明外，本机证据基线为 Task 7 的 Preview Harness

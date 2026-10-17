@@ -3,6 +3,22 @@
 Status: Accepted — the user confirmed the consolidated design and requested
 implementation on the isolated worktree, followed by a Pull Request targeting main.
 
+## 现行打包实现（2026-10-11）
+
+按 [ADR-0035](../adr/0035-migrate-existing-analyzers-to-native-apis.md) 与
+[0025](0025-migrate-existing-analyzers-to-native-helpers.md)，七套支持包均经公共 Native Host。
+Rust/Python/TS-JS 的 1.1.0 候选分别包含 `narrant-rust`、内嵌 typeshed 的 `narrant-python`、
+私有 Node 24.18.0 和直接 TypeScript 6.0.3 API helper；不包含旧 rust-analyzer/ty/TLS 服务入口。
+TS 分发删除 tsserver/typingsInstaller/watchGuard，保留固定标准声明闭包及 Node/依赖许可。
+Rust/Python 的独立锁文件固定同批原生库，正常构建收集实际目标 Cargo 许可闭包。
+Python 少数确切版本的 MIT 声明附上标明来源的标准条款；seahash 上游通知未取回的
+边界见 [来源记录](../../native-helpers/python/licenses/sources.json)，不能声称通知完整。
+Host Cargo 与应用 pnpm 锁不再含旧直接 parser/server 依赖；其他实际消费者的共享依赖保留。
+
+三种迁移语言本地 macOS 验收通过，最终 Windows x64 和七套双平台 CI 尚待完成；catalog
+保持 `published:false` / `verifiedTargets:[]`。以下首版决策与依赖调查保留时间背景，
+服务器/内嵌 bridge 字样不代表现行生产 fallback。包租约、下载和项目工具链边界保持不变。
+
 ## 已明确的需求
 
 - 在新的 worktree 分支设计和实现，基于上一轮已经完成的 Review 修复与结构图改动。
@@ -24,7 +40,7 @@ implementation on the isolated worktree, followed by a Pull Request targeting ma
   Narrant 不替用户自动安装或修改 Rust 项目工具链。
 - Q5：支持包独立编号，由应用声明需要的已验证版本。相同版本可跨 Review 和兼容的
   应用版本重复使用，缺少所需版本时才下载；支持包不自行追踪或升级到最新版。
-- Q6：复用现有 `updates.cyunlab.com` OSS 分发渠道，为语言支持包使用独立路径。
+- Q6（由 ADR-0036 更新）：通过 `XLCYun/narrant` 的独立语言版本 prerelease 分发，不占用应用 Latest。
   首批覆盖现有安装包平台：macOS Apple Silicon 和 Windows x64。
 - Q7：离开结构视图或切换 Review 后，已经开始的下载继续在后台运行；多个 Review
   请求同一个包的相同版本时共用一次下载。退出应用时停止未完成的下载，已经安装
@@ -54,7 +70,7 @@ implementation on the isolated worktree, followed by a Pull Request targeting ma
   当前任一语言分析失败都会使整个结构比较失败，不能静默输出不完整的成功结果。见
   [`application/mod.rs`](../../src-tauri/src/structure_review/application/mod.rs)。
 - 当前安装包目标为 macOS Apple Silicon 和 Windows x64。应用更新使用
-  `updates.cyunlab.com` 的 OSS 通道；Q6 已确定支持包也使用该渠道的独立路径。见
+  `XLCYun/narrant` 的 GitHub Releases；支持包使用独立语言版本 prerelease。见
   [ADR-0026](../adr/0026-publish-binary-releases-from-source-tags.md) 和
   [ADR-0029](../adr/0029-use-oss-as-the-stable-application-update-authority.md)。
 - 当前 Tauri bundle 没有携带 Rust 或 TS/JS 的结构分析工具；默认路径来自编译时开发
@@ -144,7 +160,7 @@ implementation on the isolated worktree, followed by a Pull Request targeting ma
 
 - 后端负责下载、校验、解压和安装，按包、版本和平台合并重复请求。前端离开页面
   不影响已经开始的共享任务，取消单个 Review 的分析只解除该分析的等待。
-- 快照查询只读取本地已维护的状态，不访问 OSS、不检查新版本、不触发下载，也不
+- 快照查询只读取本地已维护的状态，不访问分发服务、不检查新版本、不触发下载，也不
   在每次查询时重新遍历安装目录计算体积。
 - 前端在应用层挂载一个查询循环，结构页、全局下载提示和设置页共用它的结果。
   活动期间每约 1 秒查询一次，上一请求结束后才调度下一次，避免重叠查询。
@@ -203,7 +219,7 @@ implementation on the isolated worktree, followed by a Pull Request targeting ma
 7. 前端验收覆盖宽窄窗口、长包名及错误内容、多个包的不同进度、后台提示、设置管理
    与重试；按仓库要求运行 Preview Harness 的真实浏览器检查及适当自动化验证。
 8. macOS Apple Silicon 和 Windows x64 均生成可验证、独立编号的支持包产物；使用
-   现有 OSS 域名的独立目录分发，应用声明的版本与实际产物一致，配套操作文档能够
+   同仓库独立语言版本 prerelease 分发，应用声明的版本与实际产物一致，配套操作文档能够
    说明如何构建和发布。生产分发可用性在实际上传并读取验证前不能宣称完成。
 
 ## 设计确认

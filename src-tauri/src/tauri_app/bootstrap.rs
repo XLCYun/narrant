@@ -18,12 +18,25 @@ use github_commands::github_api_base_url;
 
 /// 装配 Tauri state、commands 与桌面插件并运行应用。
 pub fn run() {
+    let context = tauri::generate_context!();
+    // 界面测试在任何用户目录或插件初始化前检查独立应用身份。
+    #[cfg(feature = "wdio")]
+    assert_eq!(
+        context.config().identifier,
+        "com.cyunlab.narrant.e2e",
+        "Desktop tests require their isolated application identity"
+    );
     #[cfg(feature = "wdio")]
     let oauth_base_url = std::env::var("NARRANT_GITHUB_OAUTH_URL")
         .unwrap_or_else(|_| "https://github.com".to_owned());
     #[cfg(not(feature = "wdio"))]
     let oauth_base_url = "https://github.com".to_owned();
-    let updater_config = TrustedUpdaterConfig::from_build();
+    // 普通界面测试不接受正式更新包，真实安装升级由独立发布验收执行。
+    let updater_config = if cfg!(feature = "wdio") {
+        TrustedUpdaterConfig::parse(None, None)
+    } else {
+        TrustedUpdaterConfig::from_build()
+    };
     let updater_public_key = updater_config
         .as_ref()
         .map(|config| config.public_key().to_owned())
@@ -114,25 +127,6 @@ pub fn run() {
                         "Rust 语言支持包尚未准备",
                     ))
                 }))
-                .with_typescript(Arc::new(|input, cancelled| {
-                    use crate::structure_review::code_graph::LanguageAnalyzer;
-                    // 全部文件被测试过滤时可以直接返回空图，无需准备或查找工具。
-                    crate::structure_review::typescript_analyzer::TypeScriptLanguageAnalyzer::new(
-                        std::path::PathBuf::new(),
-                        std::path::PathBuf::new(),
-                    )
-                    .with_cancellation(cancelled)
-                    .analyze(input)
-                }))
-                .with_python(Arc::new(|input, cancelled| {
-                    use crate::structure_review::code_graph::LanguageAnalyzer;
-                    // 全部测试文件被过滤时，无需下载或启动 Python 支持包。
-                    crate::structure_review::python_analyzer::PythonLanguageAnalyzer::new(
-                        std::path::PathBuf::new(),
-                    )
-                    .with_cancellation(cancelled)
-                    .analyze(input)
-                }))
                 .with_support_packs(support.clone()),
             );
             app.manage(support);
@@ -217,8 +211,6 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
-    let application = builder
-        .build(tauri::generate_context!())
-        .expect("build Narrant");
+    let application = builder.build(context).expect("build Narrant");
     application.run(shutdown::handle_run_event);
 }

@@ -533,7 +533,7 @@ fn subprocess_bounds_resources_and_all_timeout_stages() {
 #[test]
 fn subprocess_cooperative_and_forced_cancellation() {
     use std::sync::atomic::{AtomicBool, Ordering};
-    for mode in ["cancel", "stall"] {
+    for mode in ["cancel", "stall", "cancel_exit", "cancel_exit_zero"] {
         let fixture = Fixture::new();
         let value = json!({"protocol":protocol::PROTOCOL,"type":"completed","id":protocol::REQUEST_ID,"outcome":"cancelled"});
         let cancellation = Arc::new(AtomicBool::new(false));
@@ -699,4 +699,41 @@ fn subprocess_bounds_blocked_stdin_writer() {
     assert!(started.elapsed() < Duration::from_secs(5));
     #[cfg(unix)]
     assert_process_gone(&fixture.tools.join("pid"));
+}
+
+#[path = "migration.rs"]
+mod migration;
+
+mod python_graph;
+mod python_native;
+mod rust_graph;
+#[path = "rust_syntax.rs"]
+mod rust_syntax;
+
+/// 即使已发送 cancel，实际后端错误或无效协议也不能改称取消成功。
+#[test]
+fn subprocess_cancel_preserves_observed_backend_and_protocol_failures() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for mode in ["cancel_failure", "cancel_invalid"] {
+        let fixture = Fixture::new();
+        let value = json!({"protocol":protocol::PROTOCOL,"type":"completed","id":protocol::REQUEST_ID,"outcome":"error","error":{"code":"union_conflict","message":"真实归并冲突","paths":["中文.go"]}});
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let observed = cancellation.clone();
+        let analyzer = fixture
+            .executable_analyzer(mode, &line(ready()), &line(value))
+            .with_cancellation(Arc::new(move || observed.load(Ordering::Acquire)));
+        let marker = fixture.tools.join("request");
+        let trigger = std::thread::spawn(move || {
+            wait_file(&marker);
+            cancellation.store(true, Ordering::Release);
+        });
+        let error = analyze(&analyzer, &fixture.input()).unwrap_err();
+        trigger.join().unwrap();
+        assert!(!error.is_cancelled(), "{mode}: {error}");
+        if mode == "cancel_failure" {
+            assert!(error.message.contains("真实归并冲突"), "{error}");
+        }
+        #[cfg(unix)]
+        assert_process_gone(&fixture.tools.join("pid"));
+    }
 }

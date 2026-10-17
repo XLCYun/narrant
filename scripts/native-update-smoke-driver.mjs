@@ -38,15 +38,21 @@ function validateOptions(options) {
 /** 运行 previous Stable→candidate 的真实 normal-exit 更新。 */
 async function runNormal(options, adapter) {
   const baseline = await adapter.installBaseline(options);
+  await adapter.prepareUserData();
   await adapter.withCandidateGate(options, async (gate) => {
     const baselineLaunch = await adapter.launch();
     await Promise.all([adapter.waitForStaging(options), gate.waitForAllRequests()]);
+    await adapter.registerUserRepository();
+    await adapter.assertUserData();
     await adapter.requestNormalClose(baselineLaunch);
     await adapter.waitForExit(baselineLaunch);
     await adapter.inspectUpdated(options, baseline);
     await adapter.assertNotRelaunched();
-    await adapter.launch();
+    const candidateLaunch = await adapter.launch();
     await adapter.inspectTrustedConfiguration(options.candidateUpdaterPublicKey);
+    await adapter.requestNormalClose(candidateLaunch);
+    await adapter.waitForExit(candidateLaunch);
+    await adapter.assertUserData();
   });
   return NORMAL_CHECKPOINTS;
 }
@@ -58,7 +64,9 @@ async function runBootstrap(options, adapter) {
   await adapter.inspectTrustedConfiguration(options.candidateUpdaterPublicKey);
   await adapter.requestNormalClose(recoveryLaunch);
   await adapter.waitForExit(recoveryLaunch);
-  await adapter.launch();
+  const cleanLaunch = await adapter.launch();
+  await adapter.requestNormalClose(cleanLaunch);
+  await adapter.waitForExit(cleanLaunch);
   return BOOTSTRAP_CHECKPOINTS;
 }
 

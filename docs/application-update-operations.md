@@ -1,177 +1,82 @@
 # Application Update 发布运维
 
-Narrant 的源码与发布控制位于私有仓库 `XLCYun/narrant`，公开 GitHub Release 位于
-`cyunlab/narrant`，作为公开制品归档而不是源码镜像。客户端和官网唯一 Stable endpoint 是：
+源码、Release、应用更新和语言支持包统一在 `XLCYun/narrant`。生产 Stable 入口：
 
 ```text
-https://updates.cyunlab.com/narrant/channels/stable/latest.json
+https://github.com/XLCYun/narrant/releases/latest/download/latest.json
 ```
 
-每次发布先在公开仓库形成完整 Draft；私有 `release.yml` 随后自动复用两平台真实原生 smoke，
-通过后维护者手动 dispatch 私有仓库
-`stable-promotion` Environment 中的 job，自动化才把同一个固定 Release ID 发布并标为 Latest。
-不得用公开仓库的 `release.published` event 反向触发私有发布控制。若 GitHub 计划支持 required
-reviewers，还应在该 Environment 增加独立审批；当前 user-owned private repository 的 GitHub Free
-计划不提供此能力。
+CI 使用 GitHub-hosted `macos-15`（ARM64）和 `windows-2022`（x64），正式包验收不在开发机运行。
+保留应用身份 `com.cyunlab.narrant`，已有数据目录、凭据和 Apple Developer ID 身份不变。
+架构依据见 [ADR-0036](adr/0036-use-one-public-github-repository-for-distribution.md)。
 
 ## GitHub 配置
 
-私有仓库需要以下 Actions secrets：
+发布构建需要以下 repository secrets：
 
-- `CYUNLAB_RELEASE_TOKEN`：fine-grained token，只授权 `cyunlab/narrant` 所需的 Release/
-  Contents 读写。它用于创建/回读 Draft 和最终发布，不得授权私有源码仓库之外的额外仓库。
-- `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：Narrant updater
-  minisign 私钥与密码，仅供发布构建使用。
+- `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：updater minisign 私钥与密码。
 - `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、
-  `APPLE_API_ISSUER`、`APPLE_API_KEY`、`APPLE_API_PRIVATE_KEY`：macOS Developer ID
-  签名、公证与 stapling。
+  `APPLE_API_ISSUER`、`APPLE_API_KEY`、`APPLE_API_PRIVATE_KEY`：macOS 签名、公证。
 
-私有仓库需要以下 Actions variables：
+需要以下 variables：
 
-- `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY`：只在 normal smoke/promotion 中验证 published previous
-  Stable archive 的公钥。它描述历史包的 signer，可能在 bridge 后暂时不同于当前 release key；bootstrap
-  必须不配置该值。
-- `NARRANT_RELEASE_SIGNING_PUBLIC_KEY`：验证本版 updater package 签名的 Tauri
-  outer-base64 minisign 公钥；正常情况下与发布私钥及下项匹配。
-- `NARRANT_UPDATER_PUBLIC_KEY`：编译进候选应用、用于验证下一版 updater 的公钥。普通发布必须与
-  `NARRANT_RELEASE_SIGNING_PUBLIC_KEY` 相同；只有计划轮换的 bridge tag 可以不同。
-- `NARRANT_UPDATER_BRIDGE_TAG`：通常留空。只在计划轮换时设置为唯一 exact
-  `vMAJOR.MINOR.PATCH` bridge tag；它不是通配符或长期开关。
-- `NARRANT_GITHUB_CLIENT_ID`、`NARRANT_GITHUB_APP_SLUG`：现有 GitHub Identity 构建配置。
+- `NARRANT_RELEASE_SIGNING_PUBLIC_KEY`：验证本版 updater 包的 outer-base64 minisign 公钥。
+- `NARRANT_UPDATER_PUBLIC_KEY`：候选应用内嵌、用于验证下一版的公钥；普通发布与上一项相同。
+- `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY`：normal 验收中验证上一 Stable 包；bootstrap 不使用。
+- `NARRANT_UPDATER_BRIDGE_TAG`：仅计划换钥时设置 exact tag，平时为空。
+- `NARRANT_GITHUB_CLIENT_ID`、`NARRANT_GITHUB_APP_SLUG`：GitHub Identity 构建配置。
 
-创建名为 `stable-promotion` 的 protected Environment：
+创建 `stable-promotion` Environment，限制默认分支；有独立维护者时可配置 required reviewers 并禁止自我审批。
+当前 Environment 仅配置分支保护，发布授权来自维护者手动 dispatch；尚无独立 reviewer 审批。
+将四项 updater 公钥/bridge variables 同步为 Environment 的受保护值；promotion 使用该授权二次复核。
+首次发布临时在 repository 和 Environment 配置相同的 `NARRANT_FIRST_UPDATER_TAG`，成功后删除。
+实际 reviewer 配置必须在仓库 Settings 核实，不能因 YAML 写了 Environment 就认定已有独立审批。
 
-1. deployment branch policy 只允许默认分支。若 GitHub 计划支持，配置 required reviewers，至少一名
-   不负责本次构建的维护者批准并禁止 self-review。当前 user-owned private repository 的 GitHub Free
-   计划不支持 required reviewers，因此 promotion 的手动 dispatch 是人工控制边界；不得把该限制写成
-   已有人审。
-2. `CYUNLAB_RELEASE_TOKEN` 必须作为 repository secret 供自动 Draft/smoke 使用，并在 Environment
-   中配置同名受保护副本供最终 promotion 使用。把 `NARRANT_RELEASE_SIGNING_PUBLIC_KEY`、
-   `NARRANT_UPDATER_PUBLIC_KEY`、`NARRANT_UPDATER_BRIDGE_TAG` 和 normal-only 的
-   `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY` 作为 repository variables 供自动 Draft/smoke 使用，
-   同时在 Environment 中配置同名副本；Environment 副本是最终 promotion 的受保护授权，必须逐字匹配
-   获批 tag 的预期值。bootstrap 期间不得设置 previous-release key。
-3. OSS 首次 Stable 迁移期间，在 repository 与 Environment 同时设置
-   `NARRANT_OSS_BOOTSTRAP_TAG=vMAJOR.MINOR.PATCH`。第一次成功后删除两处变量；之后只允许 normal
-   promotion，不能用 GitHub Release 历史代替 OSS previous Stable 身份。
-4. Environment 还必须配置 `OSS_BUCKET=xlcyun-public`、`OSS_REGION=cn-shenzhen`、
-   `ALIBABA_CLOUD_OIDC_PROVIDER_ARN` 与只允许 Narrant 前缀写入的
-   `ALIBABA_CLOUD_ROLE_ARN`。OIDC role 不使用长期 AccessKey；bucket 必须启用 Versioning，公开策略
-   只读 `narrant/releases/*`、`narrant/candidates/*` 和 Stable manifest。
-5. workflow 始终 checkout 默认分支上的可信脚本，再把 source tag/SHA 当作不可信数据验证，
-   不执行 tag 中的脚本。
+不再需要跨仓库 token、OSS/OIDC 角色或 self-hosted runner 标签。工作流使用本仓库 `GITHUB_TOKEN`，
+只有 Draft、promotion 和语言包发布 job 有 Contents 写权限；smoke 和 Actions 证据查询只读。
+令牌只进入请求头，不进入 URL、argv、artifact 或日志。
 
-`update-smoke.yml` 需要读取 Draft，因此 runner 也使用 `CYUNLAB_RELEASE_TOKEN`。脚本只执行
-Release GET/asset download；token 只进入 `Authorization` header，不进入 URL、argv、artifact、
-evidence 或错误正文。最终写操作只存在于受保护的 promotion job。
+## 正常发布
 
-个人账户下的私有仓库在 GitHub Free 计划中不提供 Artifact Attestations。当前 promotion 在下载
-evidence 前调用 `scripts/verify-evidence-run.mjs`，通过只读 Actions API 固定验证 run 属于
-`XLCYun/narrant`。正常自动路径要求 `.github/workflows/release.yml` 的 tag push run 绑定 exact
-source tag/SHA，并且恰好有两个构建 artifact、两个 target artifact 与一个 aggregate artifact；手动
-重试路径仍要求 `.github/workflows/update-smoke.yml` 的 `workflow_dispatch` run 绑定默认分支及 promotion
-checkout 的可信 SHA，并且恰好有三个 smoke artifact。两种路径都要求 attempt 为 1、结论为 success，
-且每个 artifact 的 ID、名称、大小、
-GitHub SHA-256 digest、run/ref 与 archive URL 都必须匹配。下载后再要求 exact-four evidence 文件和
-byte-exact `.sha256` companion。升级 GitHub 计划或调整仓库形态后，应恢复 Artifact Attestations，
-不能在文档中把当前替代门禁描述成 attestation。
+1. 在默认分支上确认 package/Tauri/Cargo 的版本一致，推送获批的 `vMAJOR.MINOR.PATCH` tag。
+   不移动或复用已发布 tag。`release.yml` 自动复用 quality-gate；不要单独手动触发 quality-gate。
+2. release 工作流记录匿名 previous Stable 的 tag 与 manifest 原始字节 SHA-256，构建两平台正式包。
+   同仓库 Draft 必须恰好有八资产：两个安装包、两个 updater 包、两个 `.sig`、`latest.json`、`SHA256SUMS`。
+3. Draft 回读验证后自动调用 `update-smoke.yml`。两个平台均安装正式上一版本，以临时 TLS gate 提供
+   候选 manifest 和包，完成真实升级、原路径替换、不自动重启、候选重开及项目/主题/语言保留检查。
+   生产包没有测试身份或观察 IPC。模拟数据保留的检查读取候选退出后的实际持久化文件。
+4. smoke 失败保留 Draft，不发布 Latest。仅 runner 临时故障时可从默认分支手动重试 update-smoke，
+   传入相同 source tag/SHA、Release ID/tag、previous tag/manifest SHA-256；不要放宽验证门禁。
+5. 记录成功的 release workflow run ID；若手动 smoke 重试则使用该独立 run ID。
+   从默认分支运行 `Promote public Stable release`，填写相同的 source/Release/previous 身份和 evidence run ID。
+6. 审批前核对 Notes、源码 SHA、固定 Release ID、资产签名和完整两平台证据。
+   job 先校验可信 run/ref/commit 与精确 artifact 集合，再下载证据和 Draft 二次验证。
+   mutation 前重新检查 Draft ID/tag/asset ID/size/state，随后只发布这个 Release 并标为 Latest。
+7. 匿名回读 Stable 入口，确认版本、两平台 URL 和签名。已发布内容不允许修补，变更必须发更高版本。
 
-## 正常发布流程
+证据验证是 Actions API + artifact digest + 内容校验，不是 Artifact Attestation。
+normal 自动路径绑定本仓库 tag push 的 release run；手动重试绑定默认分支可信 SHA 的 update-smoke run。
+历史独立测试包证据不能获得当前正式包 promotion 资格。
 
-1. 在私有仓库创建并推送经批准的 `vMAJOR.MINOR.PATCH` tag。确认 tag 解引用为默认分支上的
-   exact 40 位 lowercase commit SHA。
-2. 等待 `release.yml` 完成。它先固定当前匿名 published Stable 的 tag 与 manifest 原始字节 SHA-256，
-   构建 macOS arm64 和 Windows x64，签名 updater packages，向 `cyunlab/narrant` 创建或完整替换一个
-   Draft；随后自动以 `mode=normal` 运行两平台真实更新 smoke。Draft 必须恰好含八个资产：两个安装包、
-   两个 updater packages、两个 `.sig`、`latest.json` 和 `SHA256SUMS`。任何 smoke 失败都会使 release
-   run 失败并保留 Draft，不会自动发布 Stable。
-3. 从 release job 日志取得固定 public Release database ID，或用 token 做只读查询：
+## 首个 GitHub Stable
 
-   ```bash
-   gh api repos/cyunlab/narrant/releases/tags/vMAJOR.MINOR.PATCH --jq .id
-   ```
+本仓库此前没有 Release。旧渠道客户端必须手动安装一次新渠道修复版，不能用旧渠道发布记录冒充
+本仓库 previous Stable。v1.2.14 还包含检查/下载任务编号缺陷，不能承诺原地自动升级。
 
-   同时记录 private source tag/full SHA 与 public Release ID/tag；public tag 不能代替 private SHA。
-4. `release.yml` 已在 Draft mutation 前记录 previous Stable tag 和 manifest SHA-256，并把它们传给自动
-   smoke。若自动 run 因 runner 临时故障需要重试，才手动运行 `Native application update smoke evidence`：
+1. 选择高于旧版的首个版本，在 repository 和 `stable-promotion` Environment 设置同一个 exact
+   `NARRANT_FIRST_UPDATER_TAG`。bootstrap 不传 previous tag/hash/key。
+2. release 工作流仅对此 tag 选择 bootstrap；分别验证 macOS 和 Windows 正式签名安装、版本、
+   内嵌信任配置、损坏暂存拒绝与干净重启。报告明确标为首版安装验收，不称为旧版升级成功。
+3. promotion 检查没有已发布 updater manifest；成功后立即删除两处 bootstrap 变量。
+   后续发布执行完整 previous Stable → candidate normal 验收，不能重新启用 bootstrap 跳过失败。
 
-   - `mode=normal`；
-   - 传入 source tag/full SHA、fixed public Release ID/public tag；
-   - 传入 previous Stable tag 与刚记录的 manifest SHA-256。
+## 失败恢复
 
-   workflow 会在 `macos-15` arm64 和 Windows x64 上重新通过 API 下载 Draft 的八个资产，校验
-   asset ID/size/完整 SHA-256、`SHA256SUMS`、manifest 和 minisign，再安装真实 previous Stable。
-   runner 临时 CA 只信任本次 `updates.cyunlab.com` leaf，hosts 只增加 loopback mapping；gate 只服务固定
-   latest 路径和当前 tag/target package。无论成功失败，hosts 按原字节恢复、DNS 刷新、helper
-   退出、临时 CA 删除。任何 cleanup 失败保留原 native 根因。
-5. 两个平台必须观察真实 check/download/durable staging、原生窗口正常关闭、共享 stop 完成后的
-   安装、同路径替换、无自动 relaunch，以及 harness 手工启动候选版本。aggregate job 只接受
-   exactly `darwin-aarch64` 和 `windows-x86_64` 两份 fresh `real-native` evidence；每份 JSON 都有
-   byte-exact `.sha256` companion。aggregate 上传两个 target artifact 与唯一 aggregate artifact。
-6. 自动路径记下成功的 **release workflow run ID**；手动重试路径才记下独立 smoke workflow run ID。
-   手动运行 `Promote public Stable release`，输入完全相同的 source/public/previous identity 和对应
-   evidence run ID。GitHub 计划支持 required reviewers 时等待独立
-   Environment 审批；当前 GitHub Free 配置由 dispatch 操作者在运行前完成人工核对。
-7. 操作者核对 source tag/SHA、public Draft ID/tag、Release Notes、previous Stable 和 smoke run。
-   job 先验证可信 workflow run 与该路径的 exact artifact set，再验证 exact-four 下载文件，随后通过
-   固定 public Release ID 下载和验签八个 Draft assets，重验 freshness/两目标/previous identity，并在
-   mutation 紧前再次校验 Draft ID、tag、asset ID/size/state。它先把 content-addressed 安装包、updater、
-   签名、checksums 与 candidate manifest 写入 OSS 并逐字节回读；随后只 PATCH 该 Release 为 Latest。
-   回读 GitHub fixed ID 后，才在 append-only promotion lock 下原子替换 OSS Stable manifest，并写后回读。
-8. 从一台不带 Actions 凭据的机器匿名读取 Stable endpoint，确认 version、两 target URL 和签名。
-   不要在已发布 Release 上“修补”资产；任何内容变化都发布更高 SemVer。
-
-## 一次性 OSS Stable bootstrap
-
-v1.1.5 没有 updater，不能伪造 v1.1.5→候选的自动升级证据。首个 updater-capable 版本采用一次性
-bootstrap：
-
-1. 在 repository 与 `stable-promotion` Environment 同时设置 exact `NARRANT_OSS_BOOTSTRAP_TAG`。
-2. 正常生成该 tag 的完整 Draft。
-3. 运行 smoke 时选择 `mode=bootstrap`，previous Stable 两项必须留空。两平台证据只声明：签名安装包
-   安装、exact installed candidate 启动、内嵌 endpoint/public key、候选版本、损坏 staging 被恢复清除、
-   正常关闭后 clean relaunch；它不声明旧版本自动升级。
-4. promotion 也选择 `mode=bootstrap`。protected variable 必须与 source tag 完全相同，previous-release
-   key 必须缺失，而且 OSS Stable object 必须不存在。其他 OSS 读取错误不能冒充 object 不存在。
-5. 第一次成功后删除 repository 与 Environment 两处 variable，并永久使用 `mode=normal`。保存 bootstrap
-   workflow run、两份 evidence、checksums、Actions artifact identity 和 Release ID 作为一次性审计记录。
-   若将来恢复 Artifact Attestations，也保存 attestation。不得因重跑方便而复用 bootstrap。
-
-旧 GitHub updater bootstrap 已于 2026-09-03 完成：source `v1.2.13` /
-`fc7ae6e060dc5520937edcd598971728f26f17d1`，release run `33648114309`，public Release ID
-`381418321`，成功 smoke run `33658283469`（aggregate artifact `9857902214`），promotion run
-`33659151005`。该记录不等于 OSS Stable 已 bootstrap；迁移时仍需按上节设置一次性 OSS tag。
-
-## 失败与恢复
-
-### Draft 或 smoke 失败
-
-- 失败发生在 promotion PATCH 前时，公开 Stable 不变。保留 Draft，查明原因后可对同一个 Draft 重跑
-  `release.yml` 的完整 reconciliation；脚本会拒绝任何已发布 Release。
-- 部分 Draft、重复/额外资产、asset ID/size/bytes 漂移、错误 signature/manifest/checksum 均不得人工
-  绕过。重新生成完整八资产，不要只补单个文件后继续旧 smoke evidence。
-- smoke runner 失败后确认日志显示 hosts、CA 和 helper cleanup 已执行。若 cleanup 也失败，废弃该 runner；
-  不得把该次运行的 evidence 用于 promotion。
-- evidence 缺失、重复、超过 24 小时、checksum 变化、Actions run/artifact identity 失败或
-  source/public/previous identity 不匹配时重新运行完整两平台 smoke，不能手工编辑 evidence 或
-  checksum。已启用 Artifact Attestations 时，attestation 失败同样必须完整重跑。
-
-### Promotion 失败或并发
-
-- GitHub mutable Releases 没有可供本流程使用的跨“guard→mutation”原子 compare-and-swap。项目明确**不启用
-  GitHub immutable releases**。自动化使用固定 Release ID、mutation 紧前 guard 和 mutation 后 Latest 回读，
-  但 release 管理员仍必须在 smoke/promotion 期间避免并发发布、改 tag 或改 Draft assets。
-- 如果 promotion 在 PATCH 前失败，Draft 保持未发布。复核 Draft bytes 和 evidence freshness 后重跑。
-- 如果网络在 PATCH 后中断，先只读查询 fixed Release ID 和 `/releases/latest`；不要直接重跑或创建同 tag
-  Release。若已发布，按已发布失败处理并保留审计记录。
-- 自动化**永远不编辑 published Release 的资产或 Release Notes**。发布后发现问题时停止进一步推广，保留
-  原 Release 供审计，构建一个更高 SemVer 修复版。客户端不自动降级。
-
-### Token 泄露
-
-立刻暂停 `release`、`update-smoke` 和 `stable-promotion`，撤销 `CYUNLAB_RELEASE_TOKEN`，审计
-`cyunlab/narrant` 的 Release/tag/asset 变化，再创建最小权限替代 token。任何未经确认的 Draft bytes
-都必须完整重建和重跑两平台 evidence。不要把 token 或 GitHub redirect signed URL贴入 issue。
+- Draft/验收失败：修复原因后重建候选；任何资产变化都使旧证据失效，需重跑两平台验收。
+- promotion 失败：先只读核实固定 Release ID 是否已经发布，以及匿名 Latest 是否相符；不要盲目重发、
+  覆盖已发布资产或降级 Latest。若已发布后发现问题，发布更高版本修复。
+- 候选运行失败：保留错误诊断，不宣称未完成的检查通过；临时 runner 的 hosts、CA、应用与夹具由 cleanup 回收。
+- workflow token 自动过期；其他签名凭据泄露按各自凭据轮换。日志不得输出 secret 值。
 
 ## Updater 私钥备份、丢失与轮换
 
@@ -216,17 +121,12 @@ artifact 或发布资产。
      `NARRANT_PREVIOUS_RELEASE_SIGNING_PUBLIC_KEY` 切为 successor，供 D 及后续 normal release 验证 previous
      archive。此后 previous/current/candidate 三个角色通常都为 successor；保留 old key 的离线退役记录。
 
-## 每次发布检查表
+## 发布检查表
 
-- [ ] private tag/full SHA 属于默认分支；版本在 package、Tauri、Cargo 中一致。
-- [ ] public Draft ID/tag 已单独记录，八资产集合、Release Notes 和签名完整。
-- [ ] macOS Developer ID/codesign/Gatekeeper/notarization/stapling 全部通过。
-- [ ] Windows 是 x64 current-user NSIS；首期不要求 Authenticode，但 updater minisign 必须通过。
-- [ ] normal evidence 绑定真实 previous Stable manifest 与 previous-release signing key SHA-256；bootstrap
-      不携带 previous key 且只在一次性首版使用。
-- [ ] exactly 两份 fresh real-native evidence、checksums、可信 Actions run 与 exact-three artifact identity
-      均通过；启用 Artifact Attestations 时 attestation 也通过。
-- [ ] dispatch 操作者已核对全部身份；GitHub 计划支持时，`stable-promotion` required reviewer 也已独立批准。
-- [ ] promotion 二次回读 fixed Draft 后才发布；published Release 未被自动化编辑。
-- [ ] 匿名 Stable endpoint 已复核；发布记录与 evidence run ID 已归档。
-- [ ] 管理员理解 immutable releases 未启用，并确认整个窗口没有并发 Draft/Release 修改。
+- [ ] source tag/full SHA 属于默认分支，source tag 与 Release tag 相同，版本一致。
+- [ ] Draft 的八个资产、Notes、manifest 和签名完整，固定 Release ID 已记录。
+- [ ] macOS 签名、公证与 stapling 通过；Windows current-user NSIS 与 updater minisign 通过。
+- [ ] 两平台 `real-native` evidence、checksums、可信 Actions run 与精确 artifact 身份全部通过。
+- [ ] normal 绑定实际 previous Stable；bootstrap 只用于无已发布 updater 的首版，且明确覆盖范围。
+- [ ] Environment 保护及审批实际生效，promotion 只修改经过二次验证的固定 Draft。
+- [ ] 匿名下载已回读，正式发布记录和 evidence run ID 可追溯。

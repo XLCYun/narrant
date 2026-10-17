@@ -1,13 +1,17 @@
 {
+  "productName": "Narrant E2E",
+  "identifier": "com.cyunlab.narrant.e2e",
   "app": {
     "windows": [
       {
-        "title": "Narrant",
+        "title": "Narrant E2E",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
         "minHeight": 600,
         "visible": true,
+        "focus": false,
+        "incognito": true,
         "titleBarStyle": "Overlay",
         "trafficLightPosition": { "x": 20, "y": 24 },
         "hiddenTitle": true

@@ -1,6 +1,6 @@
 //! 固定侧选集、受信工具目录和显式平台元数据的边界校验。
 
-use super::{failure, protocol, NativeLanguageAnalyzer, Platform, Result};
+use super::{failure, protocol, NativeLanguageAnalyzer, NativeProfile, Platform, Result};
 use crate::structure_review::code_graph::AnalysisInput;
 use serde_json::{json, Value};
 use std::{
@@ -98,7 +98,21 @@ pub(super) fn validate(
         #[cfg(not(windows))]
         let normalized = path.to_string();
         let resolved = repository_file(&repository, &normalized)?;
-        if !files.insert(normalized) || !resolved_files.insert(resolved) {
+        // Python 保留词法身份；TS/Rust 在 helper 中按真实路径去重并聚合来源。原有四语言仍拒绝别名。
+        let distinct_physical = resolved_files.insert(resolved);
+        if !files.insert(normalized)
+            || (!distinct_physical
+                && !matches!(
+                    NativeProfile::parse(&analyzer.identity.profile),
+                    Some(
+                        NativeProfile::Python
+                            | NativeProfile::TypeScriptJavascript
+                            | NativeProfile::RustRepository
+                            | NativeProfile::RustStandardLibrary
+                            | NativeProfile::RustAllDependencies
+                    )
+                ))
+        {
             return Err(failure("选集包含重复路径或同一文件的别名"));
         }
     }
@@ -168,6 +182,7 @@ pub(super) fn validate(
     for platform in &mut platforms {
         platform.root = external_root(&platform.root, &repository)?;
     }
+    validate_profile(analyzer, &platforms)?;
     Ok(CheckedInput {
         repository,
         files,
@@ -197,6 +212,9 @@ fn validate_metadata(platform: &Platform, kinds: &BTreeMap<&str, &str>) -> Resul
         .as_object()
         .ok_or_else(|| failure("平台 metadata 必须是对象"))?;
     let (required, optional): (&[&str], &[&str]) = match platform.kind.as_str() {
+        "rust-standard-library" => (&["rust_src"], &[]),
+        "typescript-declarations" => (&["package"], &[]),
+        "python-embedded-stdlib" => (&["source_revision"], &[]),
         "go-sdk" => (&["goos", "goarch"], &["goamd64"]),
         "java-jdk" => (&["release"], &[]),
         "dotnet-reference-assemblies" => {
@@ -264,6 +282,43 @@ fn validate_metadata(platform: &Platform, kinds: &BTreeMap<&str, &str>) -> Resul
             return Err(failure("平台 metadata 值必须为非空字符串"));
         }
     }
+    match platform.kind.as_str() {
+        "rust-standard-library" => {
+            let source = object["rust_src"].as_str().unwrap();
+            relative(source)?;
+            let root = platform.root.canonicalize().map_err(failure)?;
+            for file in ["core/src/lib.rs", "std/src/lib.rs"] {
+                let resolved = root
+                    .join(source)
+                    .join(file)
+                    .canonicalize()
+                    .map_err(failure)?;
+                if !resolved.starts_with(&root) || !resolved.is_file() {
+                    return Err(failure("Rust 标准声明不存在或逃逸 sysroot"));
+                }
+            }
+        }
+        "typescript-declarations" => {
+            let package = object["package"].as_str().unwrap();
+            let entry = match package {
+                "typescript" => "lib.d.ts",
+                "@types/node" | "undici-types" => "index.d.ts",
+                _ => return Err(failure("未批准的 TypeScript 标准声明包")),
+            };
+            let root = platform.root.canonicalize().map_err(failure)?;
+            let resolved = root.join(entry).canonicalize().map_err(failure)?;
+            if !resolved.starts_with(&root) || !resolved.is_file() {
+                return Err(failure("TypeScript 标准声明入口越界或不存在"));
+            }
+        }
+        "python-embedded-stdlib" => {
+            let revision = object["source_revision"].as_str().unwrap();
+            if revision.len() != 40 || !revision.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(failure("Python 内嵌标准声明必须标记固定源码 revision"));
+            }
+        }
+        _ => {}
+    }
     if platform.kind == "go-sdk"
         && object.contains_key("goamd64")
         && (object["goarch"] != "amd64"
@@ -271,12 +326,69 @@ fn validate_metadata(platform: &Platform, kinds: &BTreeMap<&str, &str>) -> Resul
     {
         return Err(failure("goamd64 只允许 amd64 的 v1–v4"));
     }
-    if platform.kind == "clang-target" {
-        if kinds.get(object["resource_platform_id"].as_str().unwrap_or_default())
+    if platform.kind == "clang-target"
+        && kinds.get(object["resource_platform_id"].as_str().unwrap_or_default())
             != Some(&"clang-resource")
-        {
-            return Err(failure("Clang 平台缺少已批准的 resource 平台"));
+    {
+        return Err(failure("Clang 平台缺少已批准的 resource 平台"));
+    }
+    Ok(())
+}
+
+/// 新 profile 只能访问自己的声明类型；内嵌 Python 声明由 helper 安装根证明来源。
+fn validate_profile(analyzer: &NativeLanguageAnalyzer, platforms: &[Platform]) -> Result<()> {
+    let Some(profile) = NativeProfile::parse(&analyzer.identity.profile) else {
+        return Ok(());
+    };
+    let (languages, kind): (&[&str], &str) = match profile {
+        NativeProfile::RustRepository => (&["rust"], ""),
+        NativeProfile::RustStandardLibrary | NativeProfile::RustAllDependencies => {
+            (&["rust"], "rust-standard-library")
         }
+        NativeProfile::TypeScriptJavascript => {
+            (&["typescript", "javascript"], "typescript-declarations")
+        }
+        NativeProfile::Python => (&["python"], "python-embedded-stdlib"),
+    };
+    if analyzer
+        .identity
+        .languages
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>()
+        != languages.iter().copied().collect()
+    {
+        return Err(failure("profile 与 helper 语言不匹配"));
+    }
+    if profile == NativeProfile::RustRepository {
+        if !platforms.is_empty() {
+            return Err(failure("Rust 仅仓库 profile 不接受标准声明"));
+        }
+        return Ok(());
+    }
+    if platforms.is_empty() || platforms.iter().any(|p| p.kind != kind) {
+        return Err(failure("profile 缺少对应标准声明或混入其他平台"));
+    }
+    if profile == NativeProfile::TypeScriptJavascript {
+        let packages = platforms
+            .iter()
+            .map(|p| p.metadata["package"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        if packages != BTreeSet::from(["typescript", "@types/node", "undici-types"])
+            || platforms.len() != 3
+        {
+            return Err(failure("TypeScript profile 必须提供三套固定标准声明"));
+        }
+    }
+    if profile == NativeProfile::Python
+        && (platforms.len() != 1
+            || !analyzer
+                .command
+                .trusted_roots
+                .iter()
+                .any(|root| root.canonicalize().ok().as_ref() == Some(&platforms[0].root)))
+    {
+        return Err(failure("Python 内嵌标准声明必须关联唯一 helper 安装根"));
     }
     Ok(())
 }

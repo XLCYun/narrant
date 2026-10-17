@@ -1,3 +1,4 @@
+import { selectedToolchainNames } from './native-migration.mjs';
 import fs from 'node:fs/promises';
 import { createReadStream, createWriteStream } from 'node:fs';
 import path from 'node:path';
@@ -17,9 +18,9 @@ export function validateToolchainManifest(manifest) {
   if (manifest.schema_version !== 1) throw new Error('Unsupported native toolchain manifest');
   for (const target of Object.values(nativeTargets)) {
     const entries = manifest.targets?.[target];
-    if (!Array.isArray(entries) || entries.length !== 9 || new Set(entries.map(item => item.name)).size !== 9) throw new Error(`Incomplete toolchains: ${target}`);
+    if (!Array.isArray(entries) || entries.length !== 10 || new Set(entries.map(item => item.name)).size !== 10) throw new Error(`Incomplete toolchains: ${target}`);
     for (const item of entries) {
-      if (!['go', 'go-target', 'dotnet', 'dotnet-ref8', 'dotnet-ref9', 'jdk25', 'jdk17', 'jdk8', 'llvm'].includes(item.name) || !/^[\w.+-]+$/.test(item.version)) throw new Error('Invalid tool identity');
+      if (!['go', 'go-target', 'dotnet', 'dotnet-ref8', 'dotnet-ref9', 'jdk25', 'jdk17', 'jdk8', 'llvm', 'cmake'].includes(item.name) || !/^[\w.+-]+$/.test(item.version)) throw new Error('Invalid tool identity');
       const url = new URL(item.url);
       if (url.protocol !== 'https:' || !['go.dev', 'builds.dotnet.microsoft.com', 'github.com', 'api.nuget.org'].includes(url.hostname) || /latest/i.test(item.url)) throw new Error('Unpinned download source');
       // 这些是 CI 的标准库夹具版本，不是产品允许分析的 TFM 列表。
@@ -69,13 +70,14 @@ export async function prepareDotnetFixtureReferences(environment) {
 }
 
 /** 安装到调用者指定的私有目录，失败时清理临时解包结果，绝不运行系统安装器。 */
-export async function provisionToolchains(output, target = nativeTargets[`${process.platform}-${process.arch}`]) {
+export async function provisionToolchains(output, target = nativeTargets[`${process.platform}-${process.arch}`], language = 'all') {
+  const selected = selectedToolchainNames(language);
   const manifest = validateToolchainManifest(JSON.parse(await fs.readFile(path.join(repository, 'resources/native-toolchains.json'), 'utf8')));
   if (!target || target !== nativeTargets[`${process.platform}-${process.arch}`]) throw new Error('Toolchains must be provisioned on their native OS/CPU');
   output = path.resolve(output);
   await fs.mkdir(output, { recursive: true });
   const environment = {};
-  for (const entry of manifest.targets[target]) {
+  for (const entry of manifest.targets[target].filter(entry => selected.includes(entry.name))) {
     const destination = path.join(output, `${entry.name}-${entry.version}`);
     // 已存在目录不盲信旧内容；一次 CI 安装只接受新建的目标。
     try { await fs.access(destination); throw new Error(`Tool directory already exists: ${destination}`); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -114,9 +116,11 @@ export async function provisionToolchains(output, target = nativeTargets[`${proc
     } finally { if (!preserveTemporary) await fs.rm(temporary, { recursive: true, force: true }); }
   }
   await prepareDotnetFixtureReferences(environment);
+  // CMake 属于构建/测试工具，不随支持包分发；两平台共用私有安装，避免依赖 runner 镜像。
+  if (environment.NARRANT_CMAKE_ROOT) environment.NARRANT_CMAKE = path.join(environment.NARRANT_CMAKE_ROOT, `bin/cmake${process.platform === 'win32' ? '.exe' : ''}`);
   // 旧 JDK 只作为声明样本；Host 的通用 JAVA_HOME 发现路径必须在真实安装中被验证。
-  environment.JAVA_HOME = environment.NARRANT_JAVA_TARGET_8;
-  environment.DOTNET_ROOT = environment.NARRANT_DOTNET_SDK;
+  if (environment.NARRANT_JAVA_TARGET_8) environment.JAVA_HOME = environment.NARRANT_JAVA_TARGET_8;
+  if (environment.NARRANT_DOTNET_SDK) environment.DOTNET_ROOT = environment.NARRANT_DOTNET_SDK;
   environment.DOTNET_CLI_HOME = path.join(output, 'dotnet-home');
   environment.DOTNET_CLI_TELEMETRY_OPTOUT = '1';
   environment.DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1';
@@ -130,5 +134,7 @@ export async function provisionToolchains(output, target = nativeTargets[`${proc
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await provisionToolchains(process.argv[2] ?? path.join(os.tmpdir(), 'narrant-native-toolchains'));
+  const language = process.argv.includes('--language') ? process.argv[process.argv.indexOf('--language') + 1] : 'all';
+  if (!language) throw new Error('--language requires a completed language or all');
+  await provisionToolchains(process.argv[2] ?? path.join(os.tmpdir(), 'narrant-native-toolchains'), undefined, language);
 }

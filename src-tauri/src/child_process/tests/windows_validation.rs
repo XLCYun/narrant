@@ -17,30 +17,17 @@ pub(crate) enum CleanupFault {
     BeforeTerminationOnce,
 }
 
-/// 批次之间只读采样真实共享 owner 的累计覆盖，不刷新账本或补等进程。
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct OwnerSnapshot {
-    pub retained: usize,
-    pub total_processes: u32,
-    pub active: u32,
-}
-
-/// 请求已经写入并 flush 后观察方法名，不伪造服务器响应或改变协议结果。
-pub(crate) type RequestObserver = Arc<dyn Fn(&str) + Send + Sync>;
-
 /// 作用域仅配置当前测试线程的观测与故障，不改变实际 owner 类型。
 #[derive(Clone)]
 pub(crate) struct ValidationOptions {
     pub fault: CleanupFault,
-    pub after_request_sent: Option<RequestObserver>,
 }
 
 impl Default for ValidationOptions {
-    /// 默认不注入故障、不安装请求观察器；产品与测试直接使用同一个 owner。
+    /// 默认不注入故障；产品与测试直接使用同一个 owner。
     fn default() -> Self {
         Self {
             fault: CleanupFault::None,
-            after_request_sent: None,
         }
     }
 }
@@ -62,24 +49,6 @@ impl SpawnObservations {
             .collect()
     }
 
-    /// 克隆同一组 root 对象句柄，避免按裸 PID 重新打开时发生身份复用。
-    pub(crate) fn roots(&self) -> Vec<OwnedHandle> {
-        self.roots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .map(|root| root.try_clone().expect("测试 root 句柄克隆失败"))
-            .collect()
-    }
-
-    /// 检查实际启动数，防止 preflight 提前返回被误认作进程生命周期验收。
-    pub(crate) fn spawn_count(&self) -> usize {
-        self.roots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
-    }
-
     /// 在真实进程守卫已建立之后记录 root；失败仍由该守卫回收直接 Child。
     fn record(&self, child: &Child) -> io::Result<()> {
         let handle = child.as_handle().try_clone_to_owned()?;
@@ -99,7 +68,7 @@ struct ScopeState {
 }
 
 thread_local! {
-    /// 不向新线程自动传播；同步 Python Session 与 LspClient 在调用线程读取它。
+    /// 不向新线程自动传播；Native Host 的同步入口在调用线程读取它。
     static CURRENT_SCOPE: RefCell<Option<ScopeState>> = const { RefCell::new(None) };
 }
 
@@ -142,19 +111,6 @@ pub(super) fn observe_spawn(child: &Child, job: &WindowsJob) -> io::Result<()> {
     Ok(())
 }
 
-/// 在真实 send 成功之后调用测试观察器；先释放线程局部借用再进入用户闭包。
-pub(crate) fn post_send(method: &str) {
-    let observer = CURRENT_SCOPE.with(|scope| {
-        scope
-            .borrow()
-            .as_ref()
-            .and_then(|state| state.options.after_request_sent.clone())
-    });
-    if let Some(observer) = observer {
-        observer(method);
-    }
-}
-
 /// 借用准确 Job 和进程句柄，不复制 Job 或改变会话所有权。
 pub(super) fn contains(job: &WindowsJob, process: &OwnedHandle) -> io::Result<bool> {
     let mut member = 0;
@@ -163,14 +119,4 @@ pub(super) fn contains(job: &WindowsJob, process: &OwnedHandle) -> io::Result<bo
         return Err(io::Error::last_os_error());
     }
     Ok(member != 0)
-}
-
-/// 仅由测试主动采样，不在清理返回后自动查询而掩盖立即 Wait(0) 的竞态。
-pub(super) fn snapshot(job: &WindowsJob) -> io::Result<OwnerSnapshot> {
-    let (retained, total_processes, active) = job.validation_snapshot()?;
-    Ok(OwnerSnapshot {
-        retained,
-        total_processes,
-        active,
-    })
 }

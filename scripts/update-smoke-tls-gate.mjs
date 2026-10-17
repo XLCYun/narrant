@@ -3,23 +3,20 @@ import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { URL } from "node:url";
 
-import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
+import { FIXED_STABLE_ENDPOINT, PUBLIC_RELEASE_REPOSITORY } from "./public-draft-assets.mjs";
 import { releaseAssetNames } from "./release-assets.mjs";
 
-const HOSTNAME = "updates.cyunlab.com";
-const LATEST_PATH = "/narrant/channels/stable/latest.json";
+const HOSTNAME = "github.com";
+const LATEST_PATH = "/XLCYun/narrant/releases/latest/download/latest.json";
 
 /** 从已验证 manifest 生成当前 target 唯一允许的 latest/tag 路由。 */
 export function createCandidateGateRoutes(options) {
-  const { target, version, directory, manifest } = options;
+  const { target, tag, version, directory, manifest } = options;
   if (!["darwin-aarch64", "windows-x86_64"].includes(target)) throw new Error("TLS gate target 无效");
   const names = releaseAssetNames(version);
   const packageName = target === "darwin-aarch64" ? names.updater.darwin : names.updater.windows;
-  const expectedUrl = manifest?.platforms?.[target]?.url;
-  const expectedPrefix = `https://${HOSTNAME}/narrant/releases/${version}/${target}/`;
-  if (typeof expectedUrl !== "string" || !expectedUrl.startsWith(expectedPrefix) || !expectedUrl.endsWith(`-${encodeURIComponent(packageName)}`)) {
-    throw new Error("TLS gate manifest package URL 不匹配");
-  }
+  const expectedUrl = `https://${HOSTNAME}/${PUBLIC_RELEASE_REPOSITORY}/releases/download/${tag}/${encodeURIComponent(packageName)}`;
+  if (manifest?.platforms?.[target]?.url !== expectedUrl) throw new Error("TLS gate manifest package URL 不匹配");
   const packageUrl = new URL(expectedUrl);
   return Object.freeze([
     Object.freeze({ pathname: LATEST_PATH, file: join(directory, names.manifest), contentType: "application/json; charset=utf-8" }),
@@ -38,7 +35,7 @@ export function validateGateConfiguration(config) {
   if (new Set(paths).size !== 2 || !paths.includes(LATEST_PATH)) throw new Error("TLS gate route 集合无效");
   for (const route of config.routes) {
     const allowedPath = route.pathname === LATEST_PATH ||
-      route.pathname.startsWith(`/narrant/releases/${config.tag.replace(/^v/, "")}/`);
+      route.pathname.startsWith(`/XLCYun/narrant/releases/download/${encodeURIComponent(config.tag)}/`);
     if (
       typeof route.file !== "string" || !route.file ||
       typeof route.pathname !== "string" ||
@@ -46,7 +43,7 @@ export function validateGateConfiguration(config) {
       posix.normalize(route.pathname) !== route.pathname ||
       route.pathname.includes("\\") || route.pathname.includes("?") || route.pathname.includes("#")
     ) {
-      throw new Error("TLS gate route 不在固定 OSS Stable/release allowlist");
+      throw new Error("TLS gate route 不在固定 GitHub latest/tag allowlist");
     }
   }
   return endpoint;

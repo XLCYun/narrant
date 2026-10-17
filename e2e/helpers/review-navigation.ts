@@ -34,16 +34,21 @@ export async function selectRef(label: "Base Ref" | "Head Ref", canonicalRef: st
   await trigger.waitForDisplayed();
   if (await trigger.isClickable()) await trigger.click();
   else await browser.execute((element) => element.click(), trigger);
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  const popupId = await trigger.getAttribute("aria-controls");
+  if (!popupId) throw new Error(`${label} 没有对应的分支弹层`);
+  // 按当前触发器的可访问关联定位，避免操作前一个正在关闭的弹层。
+  const popup = await $(`[id='${popupId}']`);
   const branch = shortBranchName(canonicalRef);
-  const search = await $("input[aria-label^='搜索分支'], input[aria-label^='Search branches']");
+  const search = await popup.$("input[role='combobox']");
   await search.waitForDisplayed();
   await search.setValue(branch);
   const exactOption = `[role='option'][aria-label='${canonicalRef}']`;
   await browser.waitUntil(async () => {
-    for (const option of await $$(exactOption)) if (await option.isDisplayed()) return true;
+    for (const option of await popup.$$(exactOption)) if (await option.isDisplayed()) return true;
     return false;
   });
-  for (const option of await $$(exactOption)) {
+  for (const option of await popup.$$(exactOption)) {
     if (!(await option.isDisplayed())) continue;
     await option.waitForClickable();
     await option.click();
@@ -51,6 +56,7 @@ export async function selectRef(label: "Base Ref" | "Head Ref", canonicalRef: st
       (element) => element.querySelector(".font-mono")?.textContent?.trim(),
       trigger,
     ).then((selected) => selected === branch));
+    await popup.waitForExist({ reverse: true });
     return;
   }
   throw new Error(`找不到 ${label}: ${canonicalRef}`);

@@ -7,7 +7,7 @@
   "app": { "withGlobalTauri": true, "windows": [{ "title": "Narrant", "width": 1100, "height": 760, "minWidth": 900, "minHeight": 600, "visible": true, "titleBarStyle": "Overlay", "trafficLightPosition": { "x": 20, "y": 24 }, "hiddenTitle": true }], "security": { "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline';", "assetProtocol": { "enable": true, "scope": ["$APPDATA/github-identity/**"] } } },
   "plugins": {
     "updater": {
-      "endpoints": ["https://updates.cyunlab.com/narrant/channels/stable/latest.json"],
+      "endpoints": ["https://github.com/XLCYun/narrant/releases/latest/download/latest.json"],
       "pubkey": "",
       "windows": { "installMode": "passive" }
     }

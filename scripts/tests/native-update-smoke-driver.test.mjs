@@ -7,12 +7,45 @@ import test from "node:test";
 
 import {
   inspectDurableStaging,
+  launchInstalled,
   observeBootstrapRecovery,
   platformStatePaths,
   writeBootstrapVerificationFixture,
 } from "../native-update-platform-adapter.mjs";
 import { combineDriverErrors, runNativeUpdateSmokeDriver } from "../native-update-smoke-driver.mjs";
 import { BOOTSTRAP_CHECKPOINTS, NORMAL_CHECKPOINTS } from "../update-smoke-evidence.mjs";
+import { driverEnvironment } from "../run-native-update-smoke.mjs";
+
+test("driver 保留 hosted 保护所需标记，但不继承发布凭据", () => {
+  assert.deepEqual(driverEnvironment({
+    GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted", RUNNER_TEMP: "/runner/tmp",
+    GH_TOKEN: "must-not-leak", TAURI_SIGNING_PRIVATE_KEY: "must-not-leak",
+  }), { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted", RUNNER_TEMP: "/runner/tmp" });
+});
+
+test("发现 PID 后仍等待原生窗口就绪，启动探测失败不能通过验收", async () => {
+  const installation = { application: "/fixture/Narrant.app", executable: "/fixture/Narrant.app/Contents/MacOS/narrant" };
+  let opened = false;
+  let probes = 0;
+  /** 模拟系统发现进程早于应用窗口就绪，不启动真实 Narrant。 */
+  const command = async (executable, arguments_) => {
+    if (executable === "open") { opened = true; return ""; }
+    if (executable === "ps") return opened ? `42 ${installation.executable}\n` : "";
+    assert.equal(executable, "/fixture/window-helper");
+    assert.deepEqual(arguments_, ["42", "ready"]);
+    probes += 1;
+    return probes === 1 ? "" : "ready\n";
+  };
+  const launch = await launchInstalled("darwin-aarch64", installation, command, {}, "/fixture/window-helper");
+  assert.equal(launch.pid, 42);
+  assert.equal(probes, 2);
+
+  opened = false;
+  await assert.rejects(() => launchInstalled("darwin-aarch64", installation, async (executable, arguments_) => {
+    if (executable === "/fixture/window-helper") throw new Error("window startup failed");
+    return command(executable, arguments_);
+  }, {}, "/fixture/window-helper"), /window startup failed/);
+});
 
 /** 创建可记录方法顺序的 fake native adapter。 */
 function adapter(events, fail = {}) {
@@ -27,6 +60,9 @@ function adapter(events, fail = {}) {
     initialize: () => invoke("initialize"),
     installBaseline: () => invoke("installBaseline", { root: "/app" }),
     installBootstrap: () => invoke("installBootstrap", { root: "/app" }),
+    prepareUserData: () => invoke("prepare-data"),
+    registerUserRepository: () => invoke("register-project"),
+    assertUserData: () => invoke("check-data"),
     withCandidateGate: async (_options, action) => {
       events.push("gate:start");
       const result = await action({ waitForAllRequests: () => invoke("gate:requests") });
@@ -63,8 +99,8 @@ test("normal driver 按 gate/staging/normal-exit/no-relaunch/manual-launch 顺�
   const events = [];
   const result = await runNativeUpdateSmokeDriver(options(), adapter(events));
   assert.deepEqual(events, [
-    "initialize", "installBaseline", "gate:start", "launch", "staging", "gate:requests",
-    "close", "exit", "updated", "no-relaunch", "launch", "trust", "gate:end", "cleanup",
+    "initialize", "installBaseline", "prepare-data", "gate:start", "launch", "staging", "gate:requests", "register-project", "check-data",
+    "close", "exit", "updated", "no-relaunch", "launch", "trust", "close", "exit", "check-data", "gate:end", "cleanup",
   ]);
   assert.deepEqual(result.checkpoints.map(({ id }) => id), [...NORMAL_CHECKPOINTS]);
 });
@@ -72,7 +108,7 @@ test("normal driver 按 gate/staging/normal-exit/no-relaunch/manual-launch 顺�
 test("bootstrap driver 不调用 baseline/gate，真实恢复后正常退出并 clean relaunch", async () => {
   const events = [];
   const result = await runNativeUpdateSmokeDriver(options("bootstrap"), adapter(events));
-  assert.deepEqual(events, ["initialize", "installBootstrap", "recovery", "trust", "close", "exit", "launch", "cleanup"]);
+  assert.deepEqual(events, ["initialize", "installBootstrap", "recovery", "trust", "close", "exit", "launch", "close", "exit", "cleanup"]);
   assert.deepEqual(result.checkpoints.map(({ id }) => id), [...BOOTSTRAP_CHECKPOINTS]);
 });
 

@@ -7,16 +7,30 @@ use httpmock::prelude::*;
 
 /// 每个目标都经过安装工厂和真实 helper，确保本机发现与打包入口共同生效。
 async fn assert_installed_target(id: PackId, installed: &Path, repository: &Path, file: &str) {
-    let analyzer = native_languages::from_pack(id, installed).unwrap();
+    let installed = installed.to_owned();
     let input = AnalysisInput {
         repository_root: repository.into(),
         files: vec![file.into()],
         options: AnalysisOptions::default(),
     };
-    let graph = tokio::task::spawn_blocking(move || analyzer.analyze(&input))
-        .await
-        .unwrap()
-        .unwrap();
+    let graph = tokio::task::spawn_blocking(move || {
+        if id == PackId::Rust {
+            native_languages::RustPackAnalyzer::from_pack(&installed)
+                .unwrap()
+                .analyze(
+                    &input,
+                    std::sync::Arc::new(|| false),
+                    crate::structure_review::code_graph::RustDependencyScope::RepositoryOnly,
+                )
+        } else {
+            native_languages::from_pack(id, &installed)
+                .unwrap()
+                .analyze(&input)
+        }
+    })
+    .await
+    .unwrap()
+    .unwrap();
     assert!(
         !graph.root().contains.is_empty(),
         "{} 返回了空图",
@@ -52,7 +66,50 @@ async fn unpublished_native_pack_reports_explicit_error() {
     packs.shutdown().await;
 }
 
-/// 本地构建的四种归档经过真实下载校验、安装、工厂和 helper 分析后才能宣称安装可用。
+/// 新增的无条件导入模块必须在下载前通过清单入口校验，不能等 Node 启动后才失败。
+#[test]
+fn typescript_manifest_requires_syntax_module_on_both_targets() {
+    let id = PackId::TypeScriptJavascript;
+    let key = PackKey {
+        id,
+        version: versions()[&id].clone(),
+    };
+    let syntax = "runtime/helper/syntax.mjs";
+    for target in ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"] {
+        let mut manifest = Manifest {
+            schema_version: 1,
+            id,
+            version: key.version.clone(),
+            target: target.into(),
+            archive_size: 1,
+            archive_sha256: "0".repeat(64),
+            files: id
+                .required(target)
+                .into_iter()
+                .filter(|path| *path != syntax)
+                .chain(std::iter::once(syntax))
+                .map(|path| model::ManifestFile {
+                    path: path.into(),
+                    size: 1,
+                    sha256: "0".repeat(64),
+                    executable: path.starts_with("bin/"),
+                })
+                .collect(),
+        };
+        assert!(
+            validate_manifest(&manifest, &key, target).is_ok(),
+            "{target}"
+        );
+        assert_eq!(manifest.files.pop().unwrap().path, syntax);
+        assert_eq!(
+            validate_manifest(&manifest, &key, target),
+            Err("语言支持包缺少必需入口".into()),
+            "{target}"
+        );
+    }
+}
+
+/// 所选已迁移归档经过真实下载校验、安装、工厂和 helper 分析后才能宣称安装可用。
 #[tokio::test]
 #[ignore = "需要 NARRANT_NATIVE_PACKS 指向真实构建产物；显式执行且不得静默跳过缺包"]
 async fn real_native_packs_install_and_analyze_through_production_factory() {
@@ -68,12 +125,27 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
     let packs =
         LanguageSupportPacks::with_origin(root.path().into(), server.base_url(), target.into())
             .unwrap();
-    for id in [PackId::Go, PackId::Java, PackId::Csharp, PackId::CCpp] {
-        let artifact = artifacts.join(id.slug()).join("0.1.0").join(target);
+    let language = std::env::var("NARRANT_NATIVE_LANGUAGE").unwrap_or_else(|_| "all".into());
+    assert!(
+        language == "all"
+            || PackId::NATIVE_MIGRATED
+                .iter()
+                .any(|id| id.slug() == language),
+        "未完成或未知的 Native 迁移：{language}"
+    );
+    for &id in PackId::NATIVE_MIGRATED
+        .iter()
+        .filter(|id| language == "all" || id.slug() == language)
+    {
+        let version = &versions()[&id];
+        let artifact = artifacts.join(id.slug()).join(version).join(target);
         for name in ["manifest.json", "pack.tar.gz"] {
-            let bytes = fs::read(artifact.join(name)).expect("验收必须具备四种真实包");
+            let bytes = fs::read(artifact.join(name)).expect("验收必须具备所选真实支持包");
             server.mock(|when, then| {
-                when.path(format!("/{}/0.1.0/{target}/{name}", id.slug()));
+                when.path(format!(
+                    "/language-pack-{}-v{version}/{target}-{name}",
+                    id.slug()
+                ));
                 then.body(bytes);
             });
         }
@@ -83,6 +155,27 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
             .unwrap();
         let fixture = tempfile::tempdir().unwrap();
         let file = match id {
+            PackId::Rust => {
+                fs::write(fixture.path().join("Cargo.toml"), "[package]\nname=\"native_fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n").unwrap();
+                fs::write(fixture.path().join("lib.rs"), "pub fn value() -> u32 { 1 }").unwrap();
+                "lib.rs"
+            }
+            PackId::TypeScriptJavascript => {
+                fs::write(
+                    fixture.path().join("main.ts"),
+                    "export function value() { return 1; }",
+                )
+                .unwrap();
+                "main.ts"
+            }
+            PackId::Python => {
+                fs::write(
+                    fixture.path().join("main.py"),
+                    "def value(): return len([])\n",
+                )
+                .unwrap();
+                "main.py"
+            }
             PackId::Go => {
                 fs::write(
                     fixture.path().join("go.mod"),
@@ -120,7 +213,6 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                 fs::write(fixture.path().join("compile_commands.json"), serde_json::to_vec(&serde_json::json!([{"directory":fixture.path(),"file":"main.cpp","arguments":["clang++","-std=c++20","main.cpp"]}])).unwrap()).unwrap();
                 "main.cpp"
             }
-            _ => unreachable!(),
         };
         if let Some(kind) = match id {
             PackId::Go => Some("go"),
@@ -187,7 +279,7 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
                 assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
             }
         }
-        assert!(packs.remove(id, "0.1.0").is_err());
+        assert!(packs.remove(id, version).is_err());
         drop(lease);
         // 已验证安装在未发布状态下仍可经生产源重新打开，且不需要再次下载。
         let reopened =
@@ -199,7 +291,7 @@ async fn real_native_packs_install_and_analyze_through_production_factory() {
             .unwrap();
         drop(installed);
         reopened.shutdown().await;
-        packs.remove(id, "0.1.0").unwrap();
+        packs.remove(id, version).unwrap();
     }
     packs.shutdown().await;
 }

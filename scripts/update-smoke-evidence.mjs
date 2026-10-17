@@ -15,6 +15,7 @@ export const REQUIRED_UPDATE_TARGETS = Object.freeze([
 export const NORMAL_CHECKPOINTS = Object.freeze([
   "baseline.signed_package_installed",
   "baseline.exact_installed_app_launched",
+  "baseline.user_data_seeded",
   "update.fixed_endpoint_checked",
   "update.draft_manifest_received",
   "update.draft_package_downloaded",
@@ -26,6 +27,7 @@ export const NORMAL_CHECKPOINTS = Object.freeze([
   "install.no_automatic_relaunch",
   "candidate.manual_relaunch",
   "candidate.version_observed",
+  "candidate.user_data_preserved",
 ]);
 export const BOOTSTRAP_CHECKPOINTS = Object.freeze([
   "bootstrap.signed_installer_verified",
@@ -55,7 +57,7 @@ const TARGET_CONTRACTS = Object.freeze({
     }),
   }),
   "windows-x86_64": Object.freeze({
-    runner: Object.freeze({ os: "windows", arch: "x86_64", image: "windows-2025" }),
+    runner: Object.freeze({ os: "windows", arch: "x86_64", image: "windows-2022" }),
     platform: Object.freeze({
       packageKind: "nsis-exe",
       installerKind: "nsis-exe",
@@ -113,7 +115,7 @@ function isNewer(candidate, previous) {
 function verifyDraftReceipt(receipt, expectations) {
   const object = requireObject(receipt, "draftReceipt");
   if (
-    object.repository !== "cyunlab/narrant" ||
+    object.repository !== "XLCYun/narrant" ||
     object.releaseId !== expectations.publicReleaseId ||
     object.tag !== expectations.publicTag ||
     object.version !== expectations.version ||
@@ -208,7 +210,7 @@ export function verifyUpdateSmokeEvidenceDocument(document, expectations) {
     if (
       previousUrl.href !== previous.packageUrl || previousUrl.protocol !== "https:" ||
       previousUrl.hostname !== "github.com" || previousUrl.username || previousUrl.password ||
-      !previousUrl.pathname.startsWith(`/cyunlab/narrant/releases/download/${encodeURIComponent(previous.tag)}/`)
+      !previousUrl.pathname.startsWith(`/XLCYun/narrant/releases/download/${encodeURIComponent(previous.tag)}/`)
     ) {
       throw new Error("previous Stable package URL 不属于固定 public Release tag");
     }

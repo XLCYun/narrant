@@ -561,7 +561,7 @@ function ReviewReaderPreview({
   };
   const [structureState, setStructureState] = useState<StructureState>(() => {
     if (structureKind === "loading") return { kind: "loading" };
-    if (structureKind === "failed") return { kind: "failed", detail: "无法启动 rust-analyzer：分析程序不存在。" };
+    if (structureKind === "failed") return { kind: "failed", detail: "无法启动 Rust 原生分析器：分析程序不存在。" };
     return structureReadyState(false);
   });
   const review: ReviewReaderBinding = {
@@ -631,7 +631,7 @@ function LanguageSupportPreview({ phase = "downloading", management = false, unk
     let current: PackCollection = { sequence: 1, requirements: { preview: native ? ["java", "go", "csharp", "c-cpp"] : ["rust", "typescript-javascript", "python"] }, packs: [
       { id: "rust", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: "ready", downloadedBytes: 0, totalBytes: null, installedBytes: 40_000_000, inUse: true, error: null },
       { id: "typescript-javascript", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: native ? "ready" : phase, downloadedBytes: 18_000_000, totalBytes: unknownTotal ? null : 50_000_000, installedBytes: native || phase === "ready" ? 150_000_000 : 0, inUse: false, error: !native && phase === "failed" ? "连接中断，语言支持包未完成安装。" + "请检查网络连接后重试，已经完成的 Rust 语言支持包会继续保留。".repeat(4) : null },
-      { id: "python", version: "1.0.0", target: "aarch64-apple-darwin", required: true, phase: native ? "ready" : phase, downloadedBytes: 8_000_000, totalBytes: unknownTotal ? null : 20_000_000, installedBytes: native || phase === "ready" ? 45_000_000 : 0, inUse: false, error: !native && phase === "failed" ? "Python 语言支持包下载中断，请重试。" : null },
+      { id: "python", version: "1.1.0", target: "aarch64-apple-darwin", required: true, phase: native ? "ready" : phase, downloadedBytes: 8_000_000, totalBytes: unknownTotal ? null : 20_000_000, installedBytes: native || phase === "ready" ? 45_000_000 : 0, inUse: false, error: !native && phase === "failed" ? "Python 语言支持包下载中断，请重试。" : null },
       ...nativePacks,
     ] };
     const application: LanguageSupportApplication = {

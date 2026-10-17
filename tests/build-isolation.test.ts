@@ -97,6 +97,15 @@ describe("生产构建隔离(验收条件 #7:测试专用插件与 endpoint 不�
     expect(JSON.stringify(e2e)).toMatch(/wdio:default/);
   });
 
+  it("E2E 的全部应用私有目录与 WebView 存储独立于日常安装", () => {
+    const production = JSON.parse(read("src-tauri/tauri.conf.json"));
+    const e2e = JSON.parse(read("src-tauri/tauri.e2e.conf.json"));
+    expect(production.identifier).toBe("com.cyunlab.narrant");
+    expect(e2e.identifier).toBe("com.cyunlab.narrant.e2e");
+    expect(e2e.app.windows[0]).toMatchObject({ incognito: true, focus: false });
+    expect(e2e.productName).not.toBe(production.productName);
+  });
+
   it("前端测试用 data-* endpoint 仅在 VITE_WDIO 下暴露", () => {
     const reader = read("src/components/review-reader.tsx");
     const home = read("src/components/home-page.tsx");

@@ -4,10 +4,9 @@ mod projection;
 mod workspace;
 
 use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
-use super::rust_analyzer::RustDependencyScope;
+use super::{code_graph::RustDependencyScope, native_analyzer::CancellationCheck};
 use crate::{
     language_support::{PackId, PackLease},
-    lsp::CancellationCheck,
     operation::OperationContext,
     review::{ReviewLifecycle, ReviewLifecycleError, SnapshotWorkspace},
 };
@@ -60,7 +59,7 @@ struct LanguageAnalyzers {
     rust: Arc<AnalyzeGraph>,
     typescript: Arc<AnalyzeTypeScript>,
     python: Arc<AnalyzePython>,
-    native: BTreeMap<PackId, Arc<AnalyzePython>>,
+    native: BTreeMap<PackId, Arc<AnalyzeGraph>>,
 }
 
 /// Structure Review 的小 Interface 隐藏 checkout、语言分析及传输投影。
@@ -84,12 +83,14 @@ impl StructureReview {
     }
 
     /// 装配共享的 TypeScript/JavaScript 分析入口；非空语言组才会调用它。
+    #[cfg(test)]
     pub fn with_typescript(mut self, analyze_typescript: Arc<AnalyzeTypeScript>) -> Self {
         self.analyzers.typescript = analyze_typescript;
         self
     }
 
     /// 装配 Python 分析入口；测试过滤在适配器内保持一致。
+    #[cfg(test)]
     pub fn with_python(mut self, analyze_python: Arc<AnalyzePython>) -> Self {
         self.analyzers.python = analyze_python;
         self
@@ -163,12 +164,18 @@ impl StructureReview {
                             ids.insert(PackId::Rust);
                         }
                         Some(LanguageGroup::TypeScript)
-                            if super::typescript_analyzer::needs_tools(path, options) =>
+                            if super::native_languages::typescript_needs_tools(
+                                std::path::Path::new(path),
+                                options,
+                            ) =>
                         {
                             ids.insert(PackId::TypeScriptJavascript);
                         }
                         Some(LanguageGroup::Python)
-                            if super::python_analyzer::needs_tools(path, options) =>
+                            if super::native_languages::python_needs_tools(
+                                std::path::Path::new(path),
+                                options,
+                            ) =>
                         {
                             ids.insert(PackId::Python);
                         }
@@ -200,52 +207,39 @@ impl StructureReview {
                     failure
                 })?;
             if let Some(root) = lease.path(PackId::Rust) {
-                let analyzer =
-                    super::rust_analyzer::RustLanguageAnalyzer::new(root.join(if cfg!(windows) {
-                        "bin/rust-analyzer.exe"
-                    } else {
-                        "bin/rust-analyzer"
-                    }));
+                let analyzer = super::native_languages::RustPackAnalyzer::from_pack(root)
+                    .map_err(analysis_error)?;
                 analyzers.rust = Arc::new(move |input, cancelled, scope| {
-                    analyzer
-                        .clone()
-                        .with_cancellation(cancelled)
-                        .with_dependency_scope(scope)
-                        .analyze(input)
+                    analyzer.analyze(input, cancelled, scope)
                 });
             }
             if let Some(root) = lease.path(PackId::TypeScriptJavascript) {
-                let analyzer = super::typescript_analyzer::TypeScriptLanguageAnalyzer::new(
-                    root.join(if cfg!(windows) {
-                        "bin/node.exe"
-                    } else {
-                        "bin/node"
-                    }),
-                    root.join("runtime"),
-                );
+                let analyzer =
+                    super::native_languages::from_pack(PackId::TypeScriptJavascript, root)
+                        .map_err(analysis_error)?;
                 analyzers.typescript = Arc::new(move |input, cancelled| {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
             }
             if let Some(root) = lease.path(PackId::Python) {
-                let analyzer = super::python_analyzer::PythonLanguageAnalyzer::new(root.join(
-                    if cfg!(windows) {
-                        "bin/ty.exe"
-                    } else {
-                        "bin/ty"
-                    },
-                ));
+                let analyzer = super::native_languages::from_pack(PackId::Python, root)
+                    .map_err(analysis_error)?;
                 analyzers.python = Arc::new(move |input, cancelled| {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
             }
-            for id in [PackId::Java, PackId::Go, PackId::Csharp, PackId::CCpp] {
+            for &id in PackId::NATIVE_MIGRATED.iter().filter(|id| {
+                !matches!(
+                    id,
+                    PackId::TypeScriptJavascript | PackId::Rust | PackId::Python
+                )
+            }) {
                 if let Some(root) = lease.path(id) {
                     let analyzer =
                         super::native_languages::from_pack(id, root).map_err(analysis_error)?;
                     analyzers.native.insert(
                         id,
-                        Arc::new(move |input, cancelled| {
+                        Arc::new(move |input, cancelled, _scope| {
                             analyzer.clone().with_cancellation(cancelled).analyze(input)
                         }),
                     );
@@ -441,16 +435,24 @@ fn analyze_side(
         files: files.rust,
         options,
     });
-    let typescript_input = (!files.typescript.is_empty()).then(|| AnalysisInput {
-        repository_root: repository.to_owned(),
-        files: files.typescript,
-        options,
-    });
-    let python_input = (!files.python.is_empty()).then(|| AnalysisInput {
-        repository_root: repository.to_owned(),
-        files: files.python,
-        options,
-    });
+    let typescript_input = files
+        .typescript
+        .iter()
+        .any(|path| super::native_languages::typescript_needs_tools(path, options))
+        .then(|| AnalysisInput {
+            repository_root: repository.to_owned(),
+            files: files.typescript,
+            options,
+        });
+    let python_input = files
+        .python
+        .iter()
+        .any(|path| super::native_languages::python_needs_tools(path, options))
+        .then(|| AnalysisInput {
+            repository_root: repository.to_owned(),
+            files: files.python,
+            options,
+        });
     let errors = Mutex::new(WorkerErrors::default());
     let (rust, typescript, python, native) = std::thread::scope(|threads| {
         let native = files
@@ -473,6 +475,7 @@ fn analyze_side(
                                 options,
                             },
                             cancelled.clone(),
+                            dependency_scope,
                         )
                         .map_err(analysis_error)
                     })

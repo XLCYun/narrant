@@ -15,7 +15,7 @@ import {
   parseReleaseIdentity,
 } from "./release-assets.mjs";
 
-const PUBLIC_REPOSITORY = "cyunlab/narrant";
+const PUBLIC_REPOSITORY = "XLCYun/narrant";
 const MAX_UPLOAD_RESPONSE_BYTES = 256 * 1024;
 const RELEASE_LOOKUP_PAGE_SIZE = 100;
 const MAX_RELEASE_LOOKUP_PAGES = 100;
@@ -72,8 +72,8 @@ function draftDownloadBaseUrl(release, repository, releaseId) {
     throw new Error("Draft Release 返回错误仓库或上传身份");
   }
   const draftIdentity = release.html_url.slice(htmlPrefix.length);
-  if (!/^untagged-[A-Za-z0-9]+$/.test(draftIdentity)) {
-    throw new Error("Draft Release 返回无效 untagged 身份");
+  if (draftIdentity !== release.tag_name && !/^untagged-[A-Za-z0-9]+$/.test(draftIdentity)) {
+    throw new Error("Draft Release 返回无效 tag 身份");
   }
   return `https://github.com/${repository}/releases/download/${draftIdentity}`;
 }

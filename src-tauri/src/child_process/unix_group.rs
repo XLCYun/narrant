@@ -12,12 +12,25 @@ pub(super) struct ProcessGroup {
 }
 
 impl ProcessGroup {
-    /// 仅接管 spawn 时以 process_group(0) 建立的独立组。
+    /// 只接管 spawn 或 current() 已建立/验证的专属进程组。
     pub(super) fn new(root: u32) -> Self {
         Self {
             id: root as i32,
             members: Vec::new(),
         }
+    }
+
+    /// 一次性 helper 只能拥有以自身 PID 为组号的域；直接启动时先脱离 shell 的组。
+    pub(super) fn current() -> io::Result<Self> {
+        // SAFETY: 只查询/设置调用进程自身，不修改父进程或其他会话。
+        let pid = unsafe { libc::getpid() };
+        if unsafe { libc::getpgrp() } != pid && unsafe { libc::setpgid(0, 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if unsafe { libc::getpgrp() } != pid {
+            return Err(io::Error::other("helper 未能建立自身专属进程组"));
+        }
+        Ok(Self::new(pid as u32))
     }
 
     /// 必须先快照再等待根进程；重试时保留上次尚未确认消失的后代。
@@ -28,10 +41,16 @@ impl ProcessGroup {
     }
 
     /// 只终止自有进程组，直接 Child 的 kill/wait 由共享所有者始终执行。
-    pub(super) fn terminate(&self) {
-        // SAFETY: 本组由 process_group(0) 创建，负 PID 只指向当前会话。
-        unsafe {
-            libc::kill(-self.id, libc::SIGKILL);
+    pub(super) fn terminate(&self) -> io::Result<()> {
+        // SAFETY: 本组由 process_group(0) 或 current() 创建，负 PID 只指向自有隔离域。
+        if unsafe { libc::kill(-self.id, libc::SIGKILL) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(error)
         }
     }
 

@@ -39,5 +39,17 @@ pub(super) fn configure_round_command(
     if let Some(effort) = &resolved_model.reasoning_effort {
         command.arg("--effort").arg(effort);
     }
-    command.arg("--json-schema").arg(schema.to_string());
+    command.arg("--json-schema");
+    let schema = schema.to_string();
+    #[cfg(all(test, windows))]
+    if !prefix_args.is_empty() {
+        // Git Bash 夹具采用 MSYS 转义：整体加引号，并转义每个反斜杠和双引号。
+        // 生产 Claude 使用原生 Windows argv，仍由 Command::arg 负责转义。
+        command.raw_arg(format!(
+            "\"{}\"",
+            schema.replace('\\', "\\\\").replace('"', "\\\"")
+        ));
+        return;
+    }
+    command.arg(schema);
 }

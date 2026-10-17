@@ -6,19 +6,30 @@ use tokio_util::sync::CancellationToken;
 
 /// 提供实际 tar.gz 和对应清单，让服务测试经过真实下载及解压边界。
 fn fixture() -> (Vec<u8>, serde_json::Value) {
-    let content = b"test rust-analyzer executable";
     let mut tar = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
-    let mut header = tar::Header::new_gnu();
-    header.set_size(content.len() as u64);
-    header.set_mode(0o755);
-    header.set_cksum();
-    tar.append_data(&mut header, "bin/rust-analyzer", content.as_slice())
-        .unwrap();
+    let mut files = Vec::new();
+    for name in PackId::Rust.required("aarch64-apple-darwin") {
+        let content = if name.starts_with("bin/") {
+            b"test narrant-rust executable".as_slice()
+        } else {
+            b"{}".as_slice()
+        };
+        let mut header = tar::Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(if name.starts_with("bin/") {
+            0o755
+        } else {
+            0o644
+        });
+        header.set_cksum();
+        tar.append_data(&mut header, name, content).unwrap();
+        files.push(serde_json::json!({"path":name,"size":content.len(),"sha256":format!("{:x}",Sha256::digest(content)),"executable":name.starts_with("bin/")}));
+    }
     let archive = tar.into_inner().unwrap().finish().unwrap();
     let manifest = serde_json::json!({
-        "schemaVersion": 1, "id": "rust", "version": "1.0.0", "target": "aarch64-apple-darwin",
+        "schemaVersion": 1, "id": "rust", "version": versions()[&PackId::Rust], "target": "aarch64-apple-darwin",
         "archiveSize": archive.len(), "archiveSha256": format!("{:x}", Sha256::digest(&archive)),
-        "files": [{"path": "bin/rust-analyzer", "size": content.len(), "sha256": format!("{:x}", Sha256::digest(content)), "executable": true}]
+        "files": files
     });
     (archive, manifest)
 }
@@ -29,11 +40,11 @@ async fn installs_complete_pack_and_reuses_it_after_restart() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     let metadata = server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     let download = server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(archive);
     });
     let directory = tempfile::tempdir().unwrap();
@@ -48,8 +59,8 @@ async fn installs_complete_pack_and_reuses_it_after_restart() {
         .await
         .unwrap();
     assert_eq!(
-        std::fs::read(lease.path(PackId::Rust).unwrap().join("bin/rust-analyzer")).unwrap(),
-        b"test rust-analyzer executable"
+        std::fs::read(lease.path(PackId::Rust).unwrap().join("bin/narrant-rust")).unwrap(),
+        b"test narrant-rust executable"
     );
     assert_eq!(packs.snapshot().packs[0].phase, PackPhase::Ready);
     drop(lease);
@@ -75,11 +86,11 @@ async fn reviews_share_download_and_cancelling_one_waiter_keeps_other_review_run
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     let download = server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.delay(std::time::Duration::from_millis(150))
             .body(archive);
     });
@@ -109,7 +120,7 @@ async fn reviews_share_download_and_cancelling_one_waiter_keeps_other_review_run
     assert!(!packs.snapshot().requirements.contains_key("cancelled"));
     download.assert_hits(1);
     assert!(packs.snapshot().packs[0].in_use);
-    assert!(packs.remove(PackId::Rust, "1.0.0").is_err());
+    assert!(packs.remove(PackId::Rust, "1.1.0").is_err());
     // 第二个应用实例也不能删除当前分析持有的版本。
     let other_instance = LanguageSupportPacks::with_origin(
         directory.path().to_owned(),
@@ -117,10 +128,10 @@ async fn reviews_share_download_and_cancelling_one_waiter_keeps_other_review_run
         "aarch64-apple-darwin".into(),
     )
     .unwrap();
-    assert!(other_instance.remove(PackId::Rust, "1.0.0").is_err());
+    assert!(other_instance.remove(PackId::Rust, "1.1.0").is_err());
     drop(lease);
     assert!(packs.snapshot().requirements.is_empty());
-    packs.remove(PackId::Rust, "1.0.0").unwrap();
+    packs.remove(PackId::Rust, "1.1.0").unwrap();
     assert_eq!(packs.snapshot().packs[0].phase, PackPhase::NotInstalled);
 }
 
@@ -130,11 +141,11 @@ async fn failed_checksum_is_never_installed_and_explicit_retry_starts_fresh() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     let mut corrupt = server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(vec![0; archive.len()]);
     });
     let directory = tempfile::tempdir().unwrap();
@@ -153,13 +164,13 @@ async fn failed_checksum_is_never_installed_and_explicit_retry_starts_fresh() {
     assert_eq!(failed.packs[0].installed_bytes, 0);
     assert!(!directory
         .path()
-        .join("installed/rust/1.0.0/aarch64-apple-darwin")
+        .join("installed/rust/1.1.0/aarch64-apple-darwin")
         .exists());
     assert_eq!(
         std::fs::read_dir(
             directory
                 .path()
-                .join("staging/rust/1.0.0/aarch64-apple-darwin")
+                .join("staging/rust/1.1.0/aarch64-apple-darwin")
         )
         .unwrap()
         .count(),
@@ -167,7 +178,7 @@ async fn failed_checksum_is_never_installed_and_explicit_retry_starts_fresh() {
     );
     corrupt.delete();
     let good = server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(archive);
     });
     packs.retry(PackId::Rust).unwrap();
@@ -190,7 +201,7 @@ async fn empty_scope_does_not_download_and_startup_removes_abandoned_staging() {
     let directory = tempfile::tempdir().unwrap();
     let leftover = directory
         .path()
-        .join("staging/rust/1.0.0/aarch64-apple-darwin/download-interrupted");
+        .join("staging/rust/1.1.0/aarch64-apple-darwin/download-interrupted");
     std::fs::create_dir_all(&leftover).unwrap();
     std::fs::write(leftover.join("download.part"), b"partial bytes").unwrap();
     let packs = LanguageSupportPacks::with_origin(
@@ -226,11 +237,11 @@ async fn invalid_manifest_cannot_escape_staging_or_request_another_archive() {
         let (_, mut manifest) = fixture();
         manifest["files"][0]["path"] = serde_json::json!(invalid);
         server.mock(|when, then| {
-            when.path("/rust/1.0.0/aarch64-apple-darwin/manifest.json");
+            when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
             then.json_body(manifest);
         });
         let archive = server.mock(|when, then| {
-            when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+            when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
             then.status(500);
         });
         let directory = tempfile::tempdir().unwrap();
@@ -254,7 +265,7 @@ async fn invalid_manifest_cannot_escape_staging_or_request_another_archive() {
 async fn real_installed_typescript_pack_analyzes_without_development_tools() {
     use crate::structure_review::{
         code_graph::{AnalysisInput, AnalysisOptions, LanguageAnalyzer},
-        typescript_analyzer::TypeScriptLanguageAnalyzer,
+        native_languages,
     };
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
@@ -263,12 +274,18 @@ async fn real_installed_typescript_pack_analyzes_without_development_tools() {
     };
     let source =
         PathBuf::from(std::env::var_os("NARRANT_LANGUAGE_PACK_FIXTURE").expect("真实包目录"));
-    let package = source.join("typescript-javascript/1.0.0").join(target);
+    let version = &versions()[&PackId::TypeScriptJavascript];
+    let package = source
+        .join("typescript-javascript")
+        .join(version)
+        .join(target);
     let server = MockServer::start();
     for name in ["manifest.json", "pack.tar.gz"] {
         let bytes = std::fs::read(package.join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/typescript-javascript/1.0.0/{target}/{name}"));
+            when.path(format!(
+                "/language-pack-typescript-javascript-v{version}/{target}-{name}"
+            ));
             then.body(bytes);
         });
     }
@@ -288,14 +305,7 @@ async fn real_installed_typescript_pack_analyzes_without_development_tools() {
         .await
         .unwrap();
     let installed = lease.path(PackId::TypeScriptJavascript).unwrap();
-    let analyzer = TypeScriptLanguageAnalyzer::new(
-        installed.join(if cfg!(windows) {
-            "bin/node.exe"
-        } else {
-            "bin/node"
-        }),
-        installed.join("runtime"),
-    );
+    let analyzer = native_languages::from_pack(PackId::TypeScriptJavascript, installed).unwrap();
     let repository = directory.path().join("project");
     std::fs::create_dir(&repository).unwrap();
     std::fs::write(
@@ -342,11 +352,11 @@ async fn shutdown_cleans_pending_install_and_next_start_is_not_ready() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.delay(std::time::Duration::from_secs(5)).body(archive);
     });
     let directory = tempfile::tempdir().unwrap();
@@ -363,11 +373,11 @@ async fn shutdown_cleans_pending_install_and_next_start_is_not_ready() {
         .unwrap();
     assert!(!directory
         .path()
-        .join("installed/rust/1.0.0/aarch64-apple-darwin")
+        .join("installed/rust/1.1.0/aarch64-apple-darwin")
         .exists());
     let staging = directory
         .path()
-        .join("staging/rust/1.0.0/aarch64-apple-darwin");
+        .join("staging/rust/1.1.0/aarch64-apple-darwin");
     assert!(!staging.exists() || std::fs::read_dir(staging).unwrap().next().is_none());
     let reopened = LanguageSupportPacks::with_origin(
         directory.path().to_owned(),
@@ -382,13 +392,13 @@ async fn shutdown_cleans_pending_install_and_next_start_is_not_ready() {
         .all(|pack| pack.phase == PackPhase::NotInstalled));
 }
 
-/// 真实 rust-analyzer 通过完整安装路径发现子项目；仅仓库范围不依赖 rust-src。
+/// 真实 narrant-rust 通过完整安装路径发现子项目；仅仓库范围不依赖 rust-src。
 #[tokio::test]
 #[ignore = "需要构建当前平台语言支持包并已有 Cargo/rustc"]
 async fn real_installed_rust_pack_analyzes_with_existing_toolchain() {
     use crate::structure_review::{
-        code_graph::{AnalysisInput, AnalysisOptions, LanguageAnalyzer},
-        rust_analyzer::{RustDependencyScope, RustLanguageAnalyzer},
+        code_graph::{AnalysisInput, AnalysisOptions, RustDependencyScope},
+        native_languages::RustPackAnalyzer,
     };
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
@@ -397,12 +407,12 @@ async fn real_installed_rust_pack_analyzes_with_existing_toolchain() {
     };
     let source =
         PathBuf::from(std::env::var_os("NARRANT_LANGUAGE_PACK_FIXTURE").expect("真实包目录"));
-    let package = source.join("rust/1.0.0").join(target);
+    let package = source.join("rust/1.1.0").join(target);
     let server = MockServer::start();
     for name in ["manifest.json", "pack.tar.gz"] {
         let bytes = std::fs::read(package.join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/rust/1.0.0/{target}/{name}"));
+            when.path(format!("/language-pack-rust-v1.1.0/{target}-{name}"));
             then.body(bytes);
         });
     }
@@ -417,13 +427,7 @@ async fn real_installed_rust_pack_analyzes_with_existing_toolchain() {
         .ensure(&[PackId::Rust], &CancellationToken::new(), None)
         .await
         .unwrap();
-    let analyzer =
-        RustLanguageAnalyzer::new(lease.path(PackId::Rust).unwrap().join(if cfg!(windows) {
-            "bin/rust-analyzer.exe"
-        } else {
-            "bin/rust-analyzer"
-        }))
-        .with_dependency_scope(RustDependencyScope::RepositoryOnly);
+    let analyzer = RustPackAnalyzer::from_pack(lease.path(PackId::Rust).unwrap()).unwrap();
     let repository = directory.path().join("project");
     std::fs::create_dir_all(repository.join("src-tauri/src")).unwrap();
     std::fs::write(
@@ -437,13 +441,17 @@ async fn real_installed_rust_pack_analyzes_with_existing_toolchain() {
     )
     .unwrap();
     let graph = tokio::task::spawn_blocking(move || {
-        analyzer.analyze(&AnalysisInput {
-            repository_root: repository,
-            files: vec!["src-tauri/src/lib.rs".into()],
-            options: AnalysisOptions {
-                include_tests: false,
+        analyzer.analyze(
+            &AnalysisInput {
+                repository_root: repository,
+                files: vec!["src-tauri/src/lib.rs".into()],
+                options: AnalysisOptions {
+                    include_tests: false,
+                },
             },
-        })
+            std::sync::Arc::new(|| false),
+            RustDependencyScope::RepositoryOnly,
+        )
     })
     .await
     .unwrap()
@@ -464,11 +472,11 @@ async fn storage_initialization_failure_is_visible_and_retryable() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(archive);
     });
     let directory = tempfile::tempdir().unwrap();
@@ -500,11 +508,11 @@ async fn independent_instances_wait_for_the_same_installation() {
     let server = MockServer::start();
     let (archive, manifest) = fixture();
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     let download = server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.delay(std::time::Duration::from_millis(100))
             .body(archive);
     });
@@ -544,11 +552,11 @@ async fn extraction_integrity_failure_cleans_staging() {
     let (archive, mut manifest) = fixture();
     manifest["files"][0]["sha256"] = serde_json::json!("0".repeat(64));
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     server.mock(|when, then| {
-        when.path("/rust/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-rust-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(archive);
     });
     let root = tempfile::tempdir().unwrap();
@@ -571,12 +579,34 @@ async fn extraction_integrity_failure_cleans_staging() {
     assert!(packs.snapshot().requirements.is_empty());
     assert!(!root
         .path()
-        .join("installed/rust/1.0.0/aarch64-apple-darwin")
+        .join("installed/rust/1.1.0/aarch64-apple-darwin")
         .exists());
     assert_eq!(
-        std::fs::read_dir(root.path().join("staging/rust/1.0.0/aarch64-apple-darwin"))
+        std::fs::read_dir(root.path().join("staging/rust/1.1.0/aarch64-apple-darwin"))
             .unwrap()
             .count(),
         0
     );
+}
+/// 允许 GitHub 资产的短期签名 URL，拒绝第三方、明文及带凭据的重定向。
+#[test]
+fn language_pack_redirects_only_use_official_https_assets() {
+    for url in [
+        "https://release-assets.githubusercontent.com/github-production-release-asset/file?signature=test",
+        "https://objects.githubusercontent.com/github-production-release-asset/file",
+    ] {
+        assert!(trusted_download_redirect(&reqwest::Url::parse(url).unwrap()));
+    }
+    for url in [
+        "http://release-assets.githubusercontent.com/file",
+        "https://attacker.example/file",
+        "https://release-assets.githubusercontent.com.attacker.example/file",
+        "https://user:password@release-assets.githubusercontent.com/file",
+        "https://release-assets.githubusercontent.com:444/file",
+        "https://release-assets.githubusercontent.com/file#fragment",
+    ] {
+        assert!(!trusted_download_redirect(
+            &reqwest::Url::parse(url).unwrap()
+        ));
+    }
 }

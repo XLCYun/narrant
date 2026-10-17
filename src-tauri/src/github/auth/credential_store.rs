@@ -63,14 +63,14 @@ impl CredentialStore for SystemCredentialStore {
     }
 }
 
-/// WDIO 进程内的隔离凭据存储，避免测试访问用户的系统钥匙串。
+/// 桌面测试进程内的隔离凭据存储，避免测试访问用户的系统钥匙串。
 #[cfg(feature = "wdio")]
 #[derive(Default)]
 pub struct EphemeralCredentialStore(Mutex<Option<String>>);
 
 #[cfg(feature = "wdio")]
 impl CredentialStore for EphemeralCredentialStore {
-    /// 返回当前 E2E 应用进程内保存的凭据封套。
+    /// 返回当前测试应用进程内保存的凭据封套。
     fn load(&self) -> Result<Option<String>, String> {
         self.0
             .lock()
@@ -78,13 +78,13 @@ impl CredentialStore for EphemeralCredentialStore {
             .map_err(|_| credential_error())
     }
 
-    /// 仅在当前 E2E 应用进程内替换凭据封套。
+    /// 仅在当前测试应用进程内替换凭据封套。
     fn save(&self, value: &str) -> Result<(), String> {
         *self.0.lock().map_err(|_| credential_error())? = Some(value.to_owned());
         Ok(())
     }
 
-    /// 删除当前 E2E 应用进程内的凭据封套。
+    /// 删除当前测试应用进程内的凭据封套。
     fn delete(&self) -> Result<(), String> {
         *self.0.lock().map_err(|_| credential_error())? = None;
         Ok(())

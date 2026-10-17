@@ -65,16 +65,6 @@ impl ObservedProcess {
     pub(crate) fn status(&self) -> u32 {
         retained_status(&self.0)
     }
-
-    /// 仅用于清理前的夹具时序证明；绝不用于放宽返回后必须已退出的断言。
-    pub(crate) fn wait_before_cleanup(&self) -> io::Result<()> {
-        // SAFETY: 准确同步句柄持续持有，限时等待夹具主动退出。
-        if unsafe { WaitForSingleObject(self.0.as_raw_handle(), 5_000) } == WAIT_OBJECT_0 {
-            Ok(())
-        } else {
-            Err(io::Error::other("父进程未按夹具约定退出"))
-        }
-    }
 }
 
 impl Drop for ObservedProcess {

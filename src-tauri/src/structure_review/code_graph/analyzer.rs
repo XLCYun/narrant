@@ -2,6 +2,19 @@ use std::path::PathBuf;
 
 use super::{AnalysisError, CodeGraph};
 
+/// Rust 语义分析允许加载的依赖范围；不改变 Code Graph 的文件范围。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RustDependencyScope {
+    /// 只加载仓库项目，跳过标准库和第三方依赖。
+    RepositoryOnly,
+    /// 允许加载标准库及其内部依赖，同时跳过项目依赖元数据。
+    #[default]
+    StandardLibrary,
+    /// 允许加载标准库和项目依赖。
+    AllDependencies,
+}
+
 /// 各语言共用的分析范围选项；默认只提取未被明确判定为测试专用的代码。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AnalysisOptions {

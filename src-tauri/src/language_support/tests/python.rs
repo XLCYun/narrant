@@ -4,19 +4,19 @@ use httpmock::prelude::*;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-/// 完整 Python 包包括原生工具、空控制入口与固定标准库许可证。
+/// 完整 Python 包的安装契约包括原生入口、控制文件与固定标准库许可证。
 fn fixture(missing_control: bool, executable: bool) -> (Vec<u8>, serde_json::Value) {
     let files = [
-        ("bin/ty", "native ty fixture"),
-        ("control/ty.toml", ""),
-        ("licenses/ty-LICENSE", "ty license"),
+        ("bin/narrant-python", "native Python fixture"),
+        ("control/native.json", ""),
+        ("licenses/Python-dependencies.json", "[]"),
         ("licenses/ruff-LICENSE", "ruff license"),
         ("licenses/typeshed-LICENSE", "typeshed license"),
     ];
     let mut tar = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
     let mut metadata = Vec::new();
     for (name, source) in files {
-        if missing_control && name == "control/ty.toml" {
+        if missing_control && name == "control/native.json" {
             continue;
         }
         let mut header = tar::Header::new_gnu();
@@ -32,7 +32,7 @@ fn fixture(missing_control: bool, executable: bool) -> (Vec<u8>, serde_json::Val
         metadata.push(serde_json::json!({"path":name,"size":source.len(),"sha256":format!("{:x}",Sha256::digest(source.as_bytes())),"executable":name.starts_with("bin/") && executable}));
     }
     let bytes = tar.into_inner().unwrap().finish().unwrap();
-    let manifest = serde_json::json!({"schemaVersion":1,"id":"python","version":"1.0.0","target":"aarch64-apple-darwin","archiveSize":bytes.len(),"archiveSha256":format!("{:x}",Sha256::digest(&bytes)),"files":metadata});
+    let manifest = serde_json::json!({"schemaVersion":1,"id":"python","version":"1.1.0","target":"aarch64-apple-darwin","archiveSize":bytes.len(),"archiveSha256":format!("{:x}",Sha256::digest(&bytes)),"files":metadata});
     (bytes, manifest)
 }
 
@@ -42,7 +42,7 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
     let server = MockServer::start();
     let (bytes, manifest) = fixture(false, true);
     let mut failed = server.mock(|when, then| {
-        when.path("/python/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.status(503);
     });
     let root = tempfile::tempdir().unwrap();
@@ -58,11 +58,11 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
         .is_err());
     failed.delete();
     let metadata = server.mock(|when, then| {
-        when.path("/python/1.0.0/aarch64-apple-darwin/manifest.json");
+        when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-manifest.json");
         then.json_body(manifest);
     });
     server.mock(|when, then| {
-        when.path("/python/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+        when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
         then.body(bytes);
     });
     packs.retry(PackId::Python).unwrap();
@@ -75,10 +75,16 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
         .await
         .unwrap();
     assert_eq!(
-        std::fs::read(lease.path(PackId::Python).unwrap().join("control/ty.toml")).unwrap(),
+        std::fs::read(
+            lease
+                .path(PackId::Python)
+                .unwrap()
+                .join("control/native.json")
+        )
+        .unwrap(),
         b""
     );
-    assert!(packs.remove(PackId::Python, "1.0.0").is_err());
+    assert!(packs.remove(PackId::Python, "1.1.0").is_err());
     drop(lease);
     packs.shutdown().await;
     drop(packs);
@@ -104,7 +110,7 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
         .unwrap();
     metadata.assert_hits(1);
     drop(lease);
-    assert!(reopened.remove(PackId::Python, "1.0.0").is_ok());
+    assert!(reopened.remove(PackId::Python, "1.1.0").is_ok());
     reopened.shutdown().await;
 }
 
@@ -122,11 +128,11 @@ async fn python_pack_rejects_incomplete_or_corrupted_payloads() {
             bytes[0] ^= 1;
         }
         server.mock(|when, then| {
-            when.path("/python/1.0.0/aarch64-apple-darwin/manifest.json");
+            when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-manifest.json");
             then.json_body(manifest);
         });
         server.mock(|when, then| {
-            when.path("/python/1.0.0/aarch64-apple-darwin/pack.tar.gz");
+            when.path("/language-pack-python-v1.1.0/aarch64-apple-darwin-pack.tar.gz");
             then.body(bytes);
         });
         let root = tempfile::tempdir().unwrap();
@@ -160,7 +166,7 @@ async fn python_pack_rejects_incomplete_or_corrupted_payloads() {
 async fn real_installed_python_pack_analyzes_without_user_python() {
     use crate::structure_review::{
         code_graph::{AnalysisInput, LanguageAnalyzer, ReferenceTarget},
-        python_analyzer::PythonLanguageAnalyzer,
+        native_languages,
     };
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
@@ -169,12 +175,12 @@ async fn real_installed_python_pack_analyzes_without_user_python() {
     };
     let source =
         PathBuf::from(std::env::var_os("NARRANT_LANGUAGE_PACK_FIXTURE").expect("真实包目录"));
-    let package = source.join("python/1.0.0").join(target);
+    let package = source.join("python/1.1.0").join(target);
     let server = MockServer::start();
     for name in ["manifest.json", "pack.tar.gz"] {
         let bytes = std::fs::read(package.join(name)).unwrap();
         server.mock(|when, then| {
-            when.path(format!("/python/1.0.0/{target}/{name}"));
+            when.path(format!("/language-pack-python-v1.1.0/{target}-{name}"));
             then.body(bytes);
         });
     }
@@ -189,17 +195,15 @@ async fn real_installed_python_pack_analyzes_without_user_python() {
         .ensure(&[PackId::Python], &CancellationToken::new(), None)
         .await
         .unwrap();
-    let executable = lease.path(PackId::Python).unwrap().join(if cfg!(windows) {
-        "bin/ty.exe"
-    } else {
-        "bin/ty"
-    });
+    let analyzer =
+        native_languages::from_pack(PackId::Python, lease.path(PackId::Python).unwrap()).unwrap();
     let repository = directory.path().join("repository");
     std::fs::create_dir(&repository).unwrap();
     std::fs::write(repository.join("main.py"), "def run(): return len([])\n").unwrap();
+    let fixture_repository = repository.clone();
     let graph = tokio::task::spawn_blocking(move || {
-        PythonLanguageAnalyzer::new(executable).analyze(&AnalysisInput {
-            repository_root: repository,
+        analyzer.analyze(&AnalysisInput {
+            repository_root: fixture_repository,
             files: vec!["main.py".into()],
             options: Default::default(),
         })
@@ -215,8 +219,27 @@ async fn real_installed_python_pack_analyzes_without_user_python() {
         found |= node.data().references.iter().any(|reference| matches!(&reference.target, ReferenceTarget::External { symbol } if graph.external_symbols()[symbol].name == "len"));
     }
     assert!(found);
-    assert!(packs.remove(PackId::Python, "1.0.0").is_err());
+    let input = AnalysisInput {
+        repository_root: repository.clone(),
+        files: vec!["main.py".into()],
+        options: Default::default(),
+    };
+    let analyzer =
+        native_languages::from_pack(PackId::Python, lease.path(PackId::Python).unwrap()).unwrap();
+    let error = analyzer
+        .clone()
+        .with_cancellation(std::sync::Arc::new(|| true))
+        .analyze(&input)
+        .unwrap_err();
+    assert!(error.is_cancelled());
+    std::fs::write(repository.join("main.py"), "def broken(\n").unwrap();
+    let error = analyzer.analyze(&input).unwrap_err();
+    assert!(
+        !error.is_cancelled() && error.message.contains("语法"),
+        "{error}"
+    );
+    assert!(packs.remove(PackId::Python, "1.1.0").is_err());
     drop(lease);
-    packs.remove(PackId::Python, "1.0.0").unwrap();
+    packs.remove(PackId::Python, "1.1.0").unwrap();
     packs.shutdown().await;
 }

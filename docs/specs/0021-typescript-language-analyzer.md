@@ -13,12 +13,16 @@ This spec extends [0018](0018-structure-review-code-graph.md) and
 [0020](0020-structure-changes-review-view.md); their graph, comparison and workspace
 lifecycle contracts remain binding. TypeScript is a peer of the existing Rust adapter.
 
-The user has authorized implementation. No further product confirmation is required.
-Use Oxc for syntax and own-content extraction and fixed TLS 6.0.0 + tsserver 6.0.3
-for semantic evidence, through the existing shared LSP transport. Do not replace this
-with a Compiler API graph extractor, tree-sitter, or a regex-based parser.
-Using the fixed TypeScript library to read JSONC/project configuration is permitted;
-semantic graph queries stay in the language service.
+The current implementation follows [ADR-0035](../adr/0035-migrate-existing-analyzers-to-native-apis.md)
+and [0025](0025-migrate-existing-analyzers-to-native-helpers.md). `native-helpers/typescript`
+uses fixed Node 24.18.0 / TypeScript 6.0.3 and the in-process Compiler/Language Service API
+for syntax, own-content and definition evidence. One worker handles one fixed side; the
+common Native Host owns process lifetime and graph validation. Oxc, TLS, tsserver, old
+setup scripts and the LSP transport are retired; no server fallback is retained. The
+unpublished 1.1.0 candidate has passed local macOS ARM64 checks and the final GitHub-hosted
+macOS ARM64 / Windows x64 helper, installation, Review and public graph gates. See
+[final migration evidence](../research/existing-native-helper-migration-validation.md) and
+[earlier TypeScript evidence](../research/0025-typescript-native-helper-migration.md).
 
 ## Language and objects
 
@@ -133,14 +137,10 @@ Normalization ignores formatting and ordinary comments but preserves ASI behavio
 template/regex values and meaningful JSX text. JSDoc can affect native semantic
 relationships without becoming its own signature/contract entry.
 
-Oxc byte spans and tsserver UTF-16 positions must be converted against the same source,
-validating UTF-8 boundaries and handling CRLF, Unicode paths and non-BMP characters.
-The shared `SourceText` index always recognizes LF and CRLF (as one line break), with
-independent flags for lone CR and U+2028/U+2029. Each adapter owns its rules: the
-current rust-analyzer adapter disables both flags, while this adapter enables both
-to match native tsserver coordinates carried by `typescript.tsserverRequest`.
-Workspace snapshots and lazily loaded declaration files use the same adapter rules;
-the shared index does not select rules by language or normalize the original source.
+Native TypeScript AST spans and definition positions refer to the same SourceFile text.
+The helper preserves original Unicode/CRLF source and translates only at its own native
+API boundary; Host receives final normalized objects, not LSP positions. The unused Host
+UTF-16 SourceText index and its transport tests have been removed.
 
 ## Relationships
 
@@ -220,11 +220,10 @@ member set for the fixed workspace session; subsequent queries check the explici
 name and file membership in memory, without `projectInfo` calls before and after every
 definition request. Project discovery seeds this same cache. Keep diagnostics per
 file/project, including empty results, so repeated queries need no extra validation or RPC.
-New service locations still pass source-scope and UTF-16/byte-boundary checks at the LSP
-adapter. Downstream declaration matching trusts that path and byte range instead of
-round-tripping self-generated URIs or converting the same coordinates again. Identity
-encoding is lexical and performs no filesystem checks. Cached source text is reused
-without reopening or rechecking its path; uncached paths still require provenance checks.
+Native definition candidates pass helper source-scope and same-SourceFile range checks.
+Downstream declaration matching trusts the checked path and native span. Identity encoding
+is lexical; cached source is reused within the fixed request, and uncached inputs still
+require provenance checks. No LSP RPC or Host position index remains.
 
 Preserve effective tsconfig/jsconfig, extends, references and package module metadata
 through a read-only TypeScript file host. Configuration overrides and first-party package
@@ -254,19 +253,20 @@ conflicting target evidence stays unresolved.
 Use fixed tools supplied to the adapter; the adapter does not download them during
 analysis. Production now uses the shared TypeScript / JavaScript
 [Language Support Pack](0022-language-support-packs.md), containing Node and the
-fixed language service/runtime declarations. The application prepares this pack before
-analysis. The explicit development setup command remains for standalone adapter tests.
+fixed native TypeScript library/runtime declarations. The application prepares this pack
+before analysis. Development tests use a locally built candidate via the normal builder.
 Neither preparation nor analysis installs dependencies into the reviewed project.
 
-The TS adapter owns its temporary helper/control directory and all child processes. Use the
-existing CancellationCheck and process lifetime guards. Cancellation, timeout, errors
-and panic must reclaim child work before returning/releasing the workspace lease.
-Shutdown acknowledgement alone does not prove the tsserver child exited.
+The common Native Host owns scratch/control data and `child_process::ProcessTree`.
+The application uses `native_analyzer::CancellationCheck`; the helper controls its worker
+thread and waits for it before terminal output. Cancellation, timeout, errors and panic
+reclaim child work before returning/releasing the workspace lease. A completed message
+alone does not prove the process tree exited.
 
 Preserve existing before/after parallelism and fixed side snapshots. Run each side's
 language groups with bounded concurrency. A hard failure in any language fails the
 whole comparison and cancels the peer; do not publish a successful empty/partial graph
-to conceal a failed service. Empty/fully excluded selections need no server startup.
+to conceal a failed service. Empty/fully excluded selections need no helper startup.
 
 ## Application and UI
 
@@ -305,7 +305,7 @@ change. Run frontend tests, type checking, lint and production build. Use the in
 browser and Preview Harness for UI changes, including wide/narrow/long-content states.
 Do not manually trigger quality-gate.
 
-## Implementation status and verification
+## Historical implementation verification (before the 0025 migration)
 
 The application implementation was completed and accepted on 2026-09-15. Production
 adapter fixtures on macOS exercise the fixed TLS 6.0.0 and tsserver 6.0.3 services,

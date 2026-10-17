@@ -37,7 +37,7 @@ async function main() {
   if (!Array.isArray(definitions) || definitions.length !== 2) throw new Error("TLS helper route config 必须精确两项");
   const routes = new Map();
   for (const definition of definitions) {
-    if (routes.has(definition.pathname) || !definition.pathname?.startsWith("/cyunlab/narrant/releases/")) {
+    if (routes.has(definition.pathname) || !definition.pathname?.startsWith("/XLCYun/narrant/releases/")) {
       throw new Error("TLS helper route 重复或越界");
     }
     const information = await stat(definition.file);

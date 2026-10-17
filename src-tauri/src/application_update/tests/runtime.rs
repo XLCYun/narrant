@@ -63,11 +63,12 @@ fn downloading_runtime() -> (
             _ => None,
         })
         .unwrap();
+    let (target, install_kind) = current_install_plan().unwrap();
     let package = super::super::ReleasePackage::new(
-        "https://github.com/cyunlab/narrant/releases/download/v2.0.0/Narrant.tar.gz",
+        "https://github.com/XLCYun/narrant/releases/download/v2.0.0/Narrant.tar.gz",
         encode(SIGNATURE),
-        super::super::platform::MACOS_TARGET,
-        super::super::InstallKind::MacosAppArchive,
+        target,
+        install_kind,
     )
     .unwrap();
     let release = StableRelease::new("2.0.0", "notes", package);
@@ -109,6 +110,54 @@ fn updater_registry_identity_is_namespaced_and_bounded() {
     let _ = managed_operation_id("download", 42);
 }
 
+/// 真实 Ready→检查成功→自动下载链路必须为下载编号绑定候选，不能沿用检查编号。
+#[test]
+fn automatic_download_binds_the_approved_download_identity() {
+    let (_cache, _data, runtime, download_id, release) = downloading_runtime();
+    assert_eq!(download_id.value(), 2, "检查与下载必须有独立任务编号");
+    assert_eq!(
+        runtime.pending_release(download_id, &release),
+        Some(release)
+    );
+}
+
+/// 自动重试使用新下载编号，旧下载与不同候选不能借用新任务的绑定。
+#[test]
+fn download_retry_rebinds_candidate_and_rejects_previous_attempt() {
+    let (_cache, _data, runtime, previous_id, release) = downloading_runtime();
+    let failed = runtime
+        .transition(UpdateInput::DownloadFailed {
+            operation_id: previous_id,
+            failure: UpdateFailure::new(UpdateFailureCategory::Network, "fixture"),
+        })
+        .unwrap();
+    let token = failed
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::ScheduleRetry { token, .. } => Some(token),
+            _ => None,
+        })
+        .unwrap();
+    let retry = runtime.transition(UpdateInput::RetryDue { token }).unwrap();
+    let retry_id = retry
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            UpdateEffect::StartDownload { operation_id, .. } => Some(operation_id),
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(previous_id, retry_id);
+    assert!(runtime.pending_release(previous_id, &release).is_none());
+    assert_eq!(
+        runtime.pending_release(retry_id, &release),
+        Some(release.clone())
+    );
+    let other = StableRelease::new("3.0.0", "other", release.package().clone());
+    assert!(runtime.pending_release(retry_id, &other).is_none());
+}
+
 #[test]
 fn runtime_converts_leaked_prerelease_domain_error_into_ordered_manifest_failure() {
     let cache = tempfile::tempdir().unwrap();
@@ -130,11 +179,12 @@ fn runtime_converts_leaked_prerelease_domain_error_into_ordered_manifest_failure
             _ => None,
         })
         .unwrap();
+    let (target, install_kind) = current_install_plan().unwrap();
     let package = super::super::ReleasePackage::new(
-        "https://github.com/cyunlab/narrant/releases/download/v2.0.0/Narrant.tar.gz",
+        "https://github.com/XLCYun/narrant/releases/download/v2.0.0/Narrant.tar.gz",
         "signature",
-        super::super::platform::MACOS_TARGET,
-        super::super::InstallKind::MacosAppArchive,
+        target,
+        install_kind,
     )
     .unwrap();
     let failed = runtime
@@ -412,19 +462,12 @@ fn post_stop_staging_try_lock_busy_returns_without_waiting() {
 fn runtime_ready_keeps_recovery_warning_queryable_and_repository_can_continue() {
     let cache = tempfile::tempdir().expect("cache");
     let data = tempfile::tempdir().expect("data");
-    let target = super::super::platform::MACOS_TARGET;
-    let context =
-        StagingContext::new("1.0.0", target, super::super::InstallKind::MacosAppArchive).unwrap();
+    let (target, install_kind) = current_install_plan().unwrap();
+    let context = StagingContext::new("1.0.0", target, install_kind).unwrap();
     let verifier = DiskMinisignVerifier::new(&encode(PUBLIC_KEY)).unwrap();
     let mut repository = StagingRepository::open(cache.path(), context, verifier).unwrap();
-    let candidate = StageCandidate::new(
-        "2.0.0",
-        encode(SIGNATURE),
-        target,
-        super::super::InstallKind::MacosAppArchive,
-        "notes",
-    )
-    .unwrap();
+    let candidate =
+        StageCandidate::new("2.0.0", encode(SIGNATURE), target, install_kind, "notes").unwrap();
     repository.stage(candidate, Cursor::new(b"test")).unwrap();
     drop(repository);
     let staging_root = cache.path().join("application-update");

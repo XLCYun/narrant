@@ -191,7 +191,7 @@ enum MacosAuthorizationOutcome {
 }
 
 /// 把 AppleScript 管理员授权收敛为可注入的单次命令边界。
-#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), all(test, unix)))]
 trait MacosAuthorizationBoundary {
     /// 使用固定 AppleScript 包装执行已经安全引用的本地替换命令。
     fn run(&mut self, command: &str) -> std::io::Result<MacosAuthorizationOutcome>;
@@ -240,7 +240,7 @@ fn parse_macos_authorization_marker(marker: &str) -> MacosAuthorizationOutcome {
 }
 
 /// 为受信本地绝对路径生成无插值的 POSIX shell 单引号参数。
-#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), all(test, unix)))]
 fn macos_shell_quote(path: &Path) -> Result<String, InstallError> {
     if !path.is_absolute() {
         return Err(InstallError::new("提权安装路径无效"));
@@ -255,7 +255,7 @@ fn macos_shell_quote(path: &Path) -> Result<String, InstallError> {
 }
 
 /// 构造保留旧应用直至新应用完成替换的提权 shell 事务。
-#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), all(test, unix)))]
 fn build_macos_authorization_script(
     source: &Path,
     destination: &Path,
@@ -285,7 +285,7 @@ fn build_macos_authorization_script(
 }
 
 /// 请求系统管理员权限并把授权、回滚和未知失败分别投影为清晰错误。
-#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), all(test, unix)))]
 fn install_macos_with_authorization(
     source: &Path,
     destination: &Path,
@@ -514,9 +514,9 @@ impl CommandLauncher for SystemCommandLauncher {
     }
 }
 
-/// 校验 DOS/PE signature 与 AMD64 machine，拒绝仅伪造 `MZ` 的文件。
+/// 校验 NSIS loader 的 DOS/PE 头；x64 应用的安装器可以使用 I386 loader。
 #[cfg(any(target_os = "windows", test))]
-fn validate_windows_pe_x64(package: &Path) -> Result<(), InstallError> {
+fn validate_windows_nsis_pe(package: &Path) -> Result<(), InstallError> {
     use std::io::{Read, Seek, SeekFrom};
     let mut input =
         std::fs::File::open(package).map_err(|_| InstallError::new("无法读取应用更新包"))?;
@@ -539,13 +539,17 @@ fn validate_windows_pe_x64(package: &Path) -> Result<(), InstallError> {
     input
         .read_exact(&mut header)
         .map_err(|_| InstallError::new("应用更新包无效"))?;
-    if &header[..4] != b"PE\0\0" || u16::from_le_bytes([header[4], header[5]]) != 0x8664 {
-        return Err(InstallError::new("应用更新包不是 Windows x64 PE"));
+    if &header[..4] != b"PE\0\0"
+        || !matches!(u16::from_le_bytes([header[4], header[5]]), 0x014c | 0x8664)
+    {
+        return Err(InstallError::new(
+            "应用更新包不是可在 Windows x64 运行的 PE",
+        ));
     }
     Ok(())
 }
 
-/// 复制并启动已签名、已复验且通过 PE x64 合约的 installer。
+/// 复制并启动已签名、已复验且通过 PE 容器检查的 NSIS installer。
 #[cfg(any(target_os = "windows", test))]
 fn prepare_and_launch_windows_nsis(
     package: &Path,
@@ -553,7 +557,7 @@ fn prepare_and_launch_windows_nsis(
     relaunch: bool,
     launcher: &impl CommandLauncher,
 ) -> Result<std::path::PathBuf, InstallError> {
-    validate_windows_pe_x64(package)?;
+    validate_windows_nsis_pe(package)?;
     let directory = tempfile::Builder::new()
         .prefix(&format!("{app_name}-update-"))
         .tempdir()
@@ -567,7 +571,7 @@ fn prepare_and_launch_windows_nsis(
     Ok(installer)
 }
 
-/// 复制已复验 EXE 到独立临时目录并以结构化 argv 启动 NSIS installer。
+/// 复制已复验的 Windows x64 目标包，并以结构化 argv 启动其 NSIS loader。
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 fn launch_windows_nsis(package: &Path, app_name: &str, relaunch: bool) -> Result<(), InstallError> {
     prepare_and_launch_windows_nsis(package, app_name, relaunch, &SystemCommandLauncher).map(|_| ())

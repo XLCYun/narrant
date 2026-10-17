@@ -10,6 +10,28 @@ The user selected rust-analyzer on 2026-09-11 after a local executable spike.
 The design interview concluded on 2026-09-12 with Q1–Q8 accepted. This document
 records the agreed scope and the implementation obligations.
 
+## Current implementation (2026-10-11)
+
+[ADR-0035](../adr/0035-migrate-existing-analyzers-to-native-apis.md) and
+[0025](0025-migrate-existing-analyzers-to-native-helpers.md) replace the former LSP
+implementation. `native-helpers/rust` directly links pinned rust-analyzer libraries
+(revision `9074e9b4c6bc31d7986ccf4e22d18af70e5508da`, build Rust 1.98.0).
+The same database supplies AST, source and navigation; helper-owned projection returns
+the unchanged Code Graph contract through `structure_review/native_analyzer`.
+`native_languages/rust` performs existing project-toolchain preflight and supplies typed
+`RustDependencyScope`, approved platforms and a whitelisted runtime environment; it preserves user PATH/rustup overrides, manifest discovery and all
+three dependency scopes. Repository/standard-library modes remain offline; all-dependency
+mode retains the user network policy. Build scripts, proc macros and automatic toolchain
+or rust-src installation remain disabled.
+
+The unpublished 1.1.0 pack candidate has passed local macOS ARM64 checks and the final
+GitHub-hosted macOS ARM64 / Windows x64 helper, graph, installation and Review gates. See
+[implementation evidence](../research/existing-native-helper-migration-validation.md) and
+[helper boundaries](../../native-helpers/rust/README.md). The server initialization,
+readiness, UTF-16 transport and executable descriptions below preserve the dated original
+design/experiments; they no longer describe production. Business mapping and option
+requirements remain binding unless 0025 explicitly replaces an implementation detail.
+
 ## Accepted starting point
 
 - Use rust-analyzer for Rust analysis.
@@ -501,7 +523,7 @@ The actual pinned server/library combination must be exercised. At minimum verif
   exercised separately from successful queries with unresolved targets. Analyses do not
   modify source files or mix source states across the two graphs.
 
-## Implementation placement
+## Historical implementation placement (before the 0025 migration)
 
 The concrete adapter lives in `src-tauri/src/structure_review/rust_analyzer/`, beside
 the language-neutral `code_graph` module. `RustLanguageAnalyzer::new(executable)`
@@ -511,7 +533,7 @@ resolution. Syntax extraction and graph resolution remain private to this Adapte
 The syntax crate is pinned to `ra_ap_syntax =0.0.349` (MSRV 1.95), compatible with the
 current Rust 1.97.1 toolchain; the newer 0.0.350/351 require 1.98.
 
-### Shared LSP Module and Rust Adapter
+### Historical shared LSP Module and Rust Adapter
 
 The dependency direction is `RustLanguageAnalyzer → RustLsp → LspClient`.
 `src-tauri/src/lsp/` exposes a language-independent synchronous stdio session.

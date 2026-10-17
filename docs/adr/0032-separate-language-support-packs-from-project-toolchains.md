@@ -2,6 +2,13 @@
 
 Status: accepted
 
+Implementation update (2026-10-11): [ADR-0035](0035-migrate-existing-analyzers-to-native-apis.md)
+replaces server executables/bridges with native helpers while retaining this pack/toolchain
+boundary. Rust supplies `narrant-rust`; TS/JS supplies private Node and direct TypeScript APIs;
+Python supplies `narrant-python` with embedded fixed typeshed. They use one public Host and
+contain no old server fallback. Historical server terminology below describes the original
+pack decision. Final migration CI and publication remain pending.
+
 Narrant provides reusable Language Support Packs whose first consumer is Structure
 Changes and whose capabilities may later be used by other language-aware features.
 Rust has its own pack; TypeScript and JavaScript share a pack containing Node and

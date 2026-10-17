@@ -248,7 +248,8 @@ fn exchange(
             }
             Ok(Event::StdoutEof) => {
                 stdout_eof = true;
-                if terminal.is_none() {
+                // 已发 cancel 的不可协作 helper 可以主动结束自身域；不能把预期 EOF 伪造为后端错误。
+                if terminal.is_none() && cancellation_deadline.is_none() {
                     let mut error = failure("helper 在完整 completed 前关闭 stdout");
                     if !diagnostics.is_empty() {
                         error.message.push_str(&format!(
@@ -291,10 +292,14 @@ fn exchange(
             if !status.success() && stdout_eof && stderr_eof {
                 return preserve(
                     terminal,
-                    failure(format!(
-                        "helper 异常退出 {status}：{}",
-                        String::from_utf8_lossy(&diagnostics)
-                    )),
+                    if cancellation_deadline.is_some() {
+                        cancelled()
+                    } else {
+                        failure(format!(
+                            "helper 异常退出 {status}：{}",
+                            String::from_utf8_lossy(&diagnostics)
+                        ))
+                    },
                 );
             }
             if stdout_eof
@@ -305,6 +310,7 @@ fn exchange(
                     Some(Err(error)) => Err(error),
                     Some(Ok(_)) if cancellation_deadline.is_some() => Err(cancelled()),
                     Some(Ok(completed)) => Ok(completed),
+                    None if cancellation_deadline.is_some() => Err(cancelled()),
                     None => Err(failure("helper 缺少终结响应")),
                 };
             }

@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { execFile, execFileSync, ChildProcess } from 'node:child_process';
+import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
+import { promisify } from 'node:util';
 import { packageDirectory } from '../build-language-support-packs.mjs';
 import { copyToolTree, smokeNativeHelper, csharpFixturePlatforms, javaFixturePlatforms, goFixturePlatforms } from '../native-language-support-packs.mjs';
 import { prepareDotnetFixtureReferences } from '../provision-native-toolchains.mjs';
@@ -81,6 +85,7 @@ test('smoke waits for killed child close before rejecting and removing cwd', asy
   const marker = path.join(markerRoot, 'cwd');
   let child, closed = false;
   t.mock.method(ChildProcess.prototype, 'kill', function (signal) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- 保留真实进程以验证 close 屏障。
     child = this;
     this.once('close', () => { closed = true; });
     setTimeout(() => originalKill.call(this, signal), 150);
@@ -92,6 +97,24 @@ test('smoke waits for killed child close before rejecting and removing cwd', asy
   try { assert.equal(closed, true, 'smoke rejected before child close'); }
   finally { if (!closed && child) await new Promise(resolve => child.once('close', resolve)); }
   await assert.rejects(fs.stat(await fs.readFile(marker, 'utf8')), { code: 'ENOENT' });
+});
+
+/** 清理失败不能遮盖原始 ready 故障；无主故障时保留准确清理错误。 */
+test('smoke preserves primary failure and reports cleanup-only failure', async t => {
+  const cleanupError = new Error('fixture cleanup failure');
+  const remove = fs.rm;
+  t.mock.method(fs, 'rm', async (root, options) => {
+    // 先真正清理本夹具，再模拟清理故障，测试本身不遗留目录。
+    await remove(root, options);
+    throw cleanupError;
+  });
+  const identity = { id: 'narrant-go', projection: 'go-source-v1', languages: ['go'], profile: 'go-static-v1' };
+  await assert.rejects(smokeNativeHelper({ ...identity, executable: process.execPath,
+    args: ['-e', `console.log(JSON.stringify({protocol:'narrant.native-analyzer/1',type:'ready',helper_id:'other'})); process.stdin.resume()`] }),
+  error => /identity mismatch; scratch cleanup failed: fixture cleanup failure/.test(error.message) && error !== cleanupError);
+  await assert.rejects(smokeNativeHelper({ ...identity, executable: process.execPath,
+    args: ['-e', `console.log(JSON.stringify({protocol:'narrant.native-analyzer/1',type:'ready',helper_id:'narrant-go',helper_version:'0.1.0',projection_revision:'go-source-v1',languages:['go'],profiles:['go-static-v1']})); process.stdin.resume()`] }),
+  error => error === cleanupError);
 });
 
 /** 本地开发产物没有通过真实双平台验收前不会被发布脚本纳入。 */
@@ -140,4 +163,130 @@ test('Java and Go fixtures describe actual SDKs without a bundled target list', 
     assert.equal(catalog.packs.java.targetJdk, undefined);
     assert.equal(catalog.packs.go.targetStandardLibrary, 'local-go-sdks');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+/** 已完成 helper 的入口身份固定；TS 暂存与未知身份拒绝不触发无关语言编译。 */
+test('migration build entry preserves completed helpers, rejects missing binaries and stages TypeScript', async t => {
+  const { migratingHelperEntry, buildMigratingNativeHelper } = await import('../build-migrating-native-helper.mjs');
+  assert.equal(migratingHelperEntry('rust', true).entry, 'bin/narrant-rust.exe');
+  assert.equal(migratingHelperEntry('python', false).binary, 'narrant-python');
+  assert.equal(migratingHelperEntry('typescript-javascript', false).entry, 'runtime/helper/main.mjs');
+  assert.throws(() => migratingHelperEntry('../project'), /Unknown/);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'native-migration-build-'));
+  try {
+    for (const id of ['rust', 'python']) {
+      const manifest = await fs.readFile(new URL(`../../native-helpers/${id}/Cargo.toml`, import.meta.url), 'utf8');
+      assert.ok(manifest.includes(`name = "narrant-${id}"`), `${id} protocol binary`);
+    }
+    // 仅替换读取到的临时清单内容，保留“缺协议 binary 在编译/产物创建前失败”的真实入口契约。
+    const readFile = fs.readFile;
+    const manifests = ['rust', 'python'].map(id => fileURLToPath(new URL(`../../native-helpers/${id}/Cargo.toml`, import.meta.url)));
+    const incomplete = t.mock.method(fs, 'readFile', async (file, ...args) => manifests.includes(file)
+      ? '[package]\nname = "core-only"\n'
+      : readFile(file, ...args));
+    try {
+      for (const id of ['rust', 'python']) await assert.rejects(buildMigratingNativeHelper(id, path.join(root, id)), /only a core proof/);
+    } finally { incomplete.mock.restore(); }
+    await assert.rejects(buildMigratingNativeHelper('../project', root), /Unknown/);
+    assert.deepEqual(await fs.readdir(root), []);
+    await buildMigratingNativeHelper('typescript-javascript', root);
+    for (const name of ['main.mjs', 'analyze.mjs', 'projection.mjs', 'workspace.mjs', 'config.mjs', 'syntax.mjs']) {
+      assert.deepEqual(await fs.readFile(path.join(root, 'runtime/helper', name)), await fs.readFile(new URL(`../../native-helpers/typescript/${name}`, import.meta.url)));
+    }
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+/** 语言筛选依据已迁移集合，不为不相关语言下载工具或接受未实现的核心。 */
+test('migration toolchain selection is explicit and complete', async () => {
+  const { selectedNativePacks, selectedToolchainNames } = await import('../native-migration.mjs');
+  assert.deepEqual(selectedToolchainNames('go'), ['go', 'go-target']);
+  assert.deepEqual(selectedToolchainNames('java'), ['jdk25', 'jdk17', 'jdk8']);
+  assert.deepEqual(selectedToolchainNames('csharp'), ['dotnet', 'dotnet-ref8', 'dotnet-ref9']);
+  assert.deepEqual(selectedToolchainNames('c-cpp'), ['llvm', 'cmake']);
+  assert.equal(selectedToolchainNames().length, 10);
+  assert.deepEqual(selectedNativePacks(), ['rust', 'python', 'typescript-javascript', 'java', 'go', 'csharp', 'c-cpp']);
+  assert.deepEqual(selectedToolchainNames('typescript-javascript'), []);
+  for (const id of ['none']) assert.throws(() => selectedToolchainNames(id), /not enabled/);
+});
+
+/** Cargo 许可步骤只保留目标生产闭包，开发依赖不能冒充实际分发依赖。 */
+test('Cargo license packaging excludes unreachable development dependencies and binds real license bytes', async () => {
+  const { packageCargoLicenses } = await import('../native-language-support-packs.mjs');
+  const repository = fileURLToPath(new URL('../../', import.meta.url));
+  const root = await fs.mkdtemp(path.join(repository, '.license-test-'));
+  try {
+    for (const name of ['source', 'development']) {
+      await fs.mkdir(path.join(root, name));
+      await fs.writeFile(path.join(root, name, 'lib.rs'), '');
+      await fs.writeFile(path.join(root, name, 'Cargo.toml'), `[package]\nname="license_${name}"\nversion="0.1.0"\nedition="2021"\nlicense="MIT"\n[lib]\npath="lib.rs"\n${name === 'source' ? '[dev-dependencies]\nlicense_development={path="../development"}\n' : ''}`);
+      await fs.writeFile(path.join(root, name, 'LICENSE'), `actual ${name} license bytes`);
+    }
+    await fs.writeFile(path.join(root, 'source/Cargo.lock'), 'version = 4\n[[package]]\nname = "license_source"\nversion = "0.1.0"\ndependencies = ["license_development"]\n[[package]]\nname = "license_development"\nversion = "0.1.0"\n');
+    const payload = path.join(root, 'payload');
+    await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
+    await packageCargoLicenses(path.join(root, 'source'), process.platform === 'win32' ? 'x86_64-pc-windows-msvc' : 'aarch64-apple-darwin', payload, 'Fixture');
+    const notices = JSON.parse(await fs.readFile(path.join(payload, 'licenses/Fixture-dependencies.json')));
+    assert.deepEqual(notices.map(item => item.name), ['license_source']);
+    assert.equal(await fs.readFile(path.join(payload, 'licenses/license_source-0.1.0/LICENSE'), 'utf8'), 'actual source license bytes');
+    await assert.rejects(fs.stat(path.join(payload, 'licenses/license_development-0.1.0')), { code: 'ENOENT' });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+/** 用本机 registry 重现 release 缓存没有开发 crate 的情况，收集仍需完整 metadata。 */
+test('Cargo license packaging fetches uncached locked metadata without distributing dev licenses', async () => {
+  const repository = fileURLToPath(new URL('../../', import.meta.url));
+  const root = await fs.mkdtemp(path.join(repository, '.license-cache-test-'));
+  const run = promisify(execFile);
+  let server;
+  try {
+    const source = path.join(root, 'source'), cargoHome = path.join(root, 'cargo-home');
+    const crate = path.join(root, 'license_development-0.1.0');
+    for (const directory of [source, cargoHome, crate]) await fs.mkdir(directory);
+    await fs.writeFile(path.join(source, 'lib.rs'), '');
+    await fs.writeFile(path.join(source, 'LICENSE'), 'actual distributed source license');
+    await fs.writeFile(path.join(source, 'Cargo.toml'), '[package]\nname="license_source"\nversion="0.1.0"\nedition="2021"\nlicense="MIT"\n[lib]\npath="lib.rs"\n[dev-dependencies]\nlicense_development="=0.1.0"\n');
+    await fs.writeFile(path.join(crate, 'lib.rs'), '');
+    await fs.writeFile(path.join(crate, 'LICENSE'), 'development license must not be distributed');
+    await fs.writeFile(path.join(crate, 'Cargo.toml'), '[package]\nname="license_development"\nversion="0.1.0"\nedition="2021"\nlicense="MIT"\n[lib]\npath="lib.rs"\n');
+    const archive = path.join(root, 'development.crate');
+    execFileSync('tar', ['-czf', archive, '-C', root, 'license_development-0.1.0'], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+    const bytes = await fs.readFile(archive), checksum = createHash('sha256').update(bytes).digest('hex');
+    const lock = `version = 4\n[[package]]\nname = "license_source"\nversion = "0.1.0"\ndependencies = ["license_development"]\n[[package]]\nname = "license_development"\nversion = "0.1.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "${checksum}"\n`;
+    await fs.writeFile(path.join(source, 'Cargo.lock'), lock);
+    let downloads = 0, address;
+    // 本机稀疏索引和真实 crate 归档让测试不依赖公网或预热的用户缓存。
+    server = createServer((request, response) => {
+      if (request.url === '/index/config.json') response.end(JSON.stringify({ dl: `${address}/api/v1/crates`, api: address }));
+      else if (request.url === '/index/li/ce/license_development') response.end(`${JSON.stringify({ name: 'license_development', vers: '0.1.0', deps: [], cksum: checksum, features: {}, yanked: false })}\n`);
+      else if (request.url === '/api/v1/crates/license_development/0.1.0/download') { downloads++; response.end(bytes); }
+      else { response.statusCode = 404; response.end(); }
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    address = `http://127.0.0.1:${server.address().port}`;
+    await fs.writeFile(path.join(cargoHome, 'config.toml'), `[source.crates-io]\nreplace-with="fixture"\n[source.fixture]\nregistry="sparse+${address}/index/"\n`);
+    const target = process.platform === 'win32' ? 'x86_64-pc-windows-msvc' : 'aarch64-apple-darwin';
+    const environment = { ...process.env, CARGO_HOME: cargoHome };
+    // 只预热 registry metadata；然后仅移除本夹具的 dev crate，保留索引与锁。
+    await run('bash', [path.join(repository, 'scripts/cargo-agent.sh'), 'metadata', '--locked', '--filter-platform', target, '--format-version', '1'], { cwd: source, env: environment });
+    assert.equal(downloads, 1);
+    for (const directory of ['cache', 'src']) {
+      for (const registry of await fs.readdir(path.join(cargoHome, 'registry', directory))) {
+        await fs.rm(path.join(cargoHome, 'registry', directory, registry, `license_development-0.1.0${directory === 'cache' ? '.crate' : ''}`), { recursive: true });
+      }
+    }
+    const payload = path.join(root, 'payload');
+    await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
+    const module = new URL('../native-language-support-packs.mjs', import.meta.url).href;
+    // 独立子进程传环境，避免并发测试改写全局 CARGO_HOME；异步调用允许 registry 响应。
+    await run(process.execPath, ['--input-type=module', '-e', `import { packageCargoLicenses } from ${JSON.stringify(module)}; await packageCargoLicenses(...JSON.parse(process.argv[1]));`, JSON.stringify([source, target, payload, 'Fixture'])], { cwd: repository, env: environment });
+    assert.equal(downloads, 2, 'collector must fetch the uncached locked development crate');
+    assert.equal(await fs.readFile(path.join(source, 'Cargo.lock'), 'utf8'), lock);
+    const notices = JSON.parse(await fs.readFile(path.join(payload, 'licenses/Fixture-dependencies.json')));
+    assert.deepEqual(notices.map(item => item.name), ['license_source']);
+    assert.equal(await fs.readFile(path.join(payload, 'licenses/license_source-0.1.0/LICENSE'), 'utf8'), 'actual distributed source license');
+    await assert.rejects(fs.stat(path.join(payload, 'licenses/license_development-0.1.0')), { code: 'ENOENT' });
+  } finally {
+    if (server) await new Promise(resolve => server.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

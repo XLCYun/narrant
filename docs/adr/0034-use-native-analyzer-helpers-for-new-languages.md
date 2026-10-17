@@ -5,6 +5,12 @@ date: 2026-10-02
 
 # Use native analyzer helpers for new languages
 
+Historical scope note (2026-10-11): [ADR-0035](0035-migrate-existing-analyzers-to-native-apis.md)
+supersedes this decision's exclusion of existing Rust, TS/JS and Python analyzers. All seven
+helpers now use the common Host; the LSP/Python sharing descriptions below record the
+2026-10-02 design and its earlier validation, not a retained production fallback.
+Migration-specific final two-platform acceptance is still pending.
+
 Java, Go, C#, and C/C++ support will use Narrant-controlled native analyzer helper
 processes behind a common process interface. Each language's helper uses its native
 analysis libraries to obtain both syntax and semantic information needed to construct

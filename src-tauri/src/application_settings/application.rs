@@ -1,6 +1,6 @@
 use super::credential::{default_custom_credential_adapter, CustomCredentialAdapter};
 use super::custom_connection::{CustomProviderConnection, CustomProviderSettings};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use super::model::BabysitModelPreference;
 use super::model::{
     ApplicationLanguage, ApplicationSettings, BabysitProvider, BabysitProviderSettings,
@@ -212,7 +212,7 @@ impl ApplicationSettingsApplication {
     /// 原子保存 Rust 结构分析的依赖范围，保留其它语言和应用偏好。
     pub(crate) fn update_rust_dependency_scope(
         &self,
-        scope: crate::structure_review::rust_analyzer::RustDependencyScope,
+        scope: crate::structure_review::code_graph::RustDependencyScope,
     ) -> Result<ApplicationSettings, ApplicationSettingsError> {
         self.update(|settings| settings.structure_review.rust.dependency_scope = scope)
     }
@@ -340,7 +340,7 @@ impl ApplicationSettingsApplication {
     }
 
     /// 将 Codex runtime 的模型投影写回完整 provider 配置，同时保留 executable。
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn update_babysit_model(
         &self,
         preference: BabysitModelPreference,

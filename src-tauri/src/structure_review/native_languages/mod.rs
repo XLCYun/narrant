@@ -1,6 +1,8 @@
 //! 固定 helper 与本机目标声明的装配；不解释项目语法或执行项目构建。
 
 mod platforms;
+mod rust;
+pub(crate) use rust::RustPackAnalyzer;
 
 use super::{
     code_graph::AnalysisError,
@@ -52,6 +54,19 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
         return Err(failure("原生支持包控制文件版本不匹配"));
     }
     let (helper, projection, languages, profile) = match id {
+        PackId::Rust => ("rust", "rust-source-v1", vec!["rust"], "rust-repository-v1"),
+        PackId::Python => (
+            "python",
+            "python-source-v1",
+            vec!["python"],
+            "python-static-v1",
+        ),
+        PackId::TypeScriptJavascript => (
+            "typescript",
+            "typescript-source-v1",
+            vec!["typescript", "javascript"],
+            "typescript-static-v1",
+        ),
         PackId::Java => ("java", "java-source-v1", vec!["java"], "java-static-v1"),
         PackId::Go => ("go", "go-source-v1", vec!["go"], "go-static-v1"),
         PackId::Csharp => (
@@ -66,7 +81,6 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
             vec!["c", "cpp"],
             "clang-static-v1",
         ),
-        _ => return Err(failure("不是原生语言支持包")),
     };
     let executable = if id == PackId::Java {
         inside(
@@ -75,6 +89,15 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
                 "runtime/jdk/bin/java.exe"
             } else {
                 "runtime/jdk/bin/java"
+            },
+        )?
+    } else if id == PackId::TypeScriptJavascript {
+        inside(
+            &root,
+            if cfg!(windows) {
+                "bin/node.exe"
+            } else {
+                "bin/node"
             },
         )?
     } else if id == PackId::Csharp {
@@ -106,6 +129,14 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
             std::env::join_paths([classes, libraries]).map_err(failure)?,
             "dev.narrant.java.Main".into(),
         ]
+    } else if id == PackId::TypeScriptJavascript {
+        vec![
+            "--disable-proto=throw".into(),
+            // 授权仍由 inside 检查；只在 Node 入口边界安全简化 Windows 规范路径。
+            dunce::simplified(&inside(&root, "runtime/helper/main.mjs")?)
+                .as_os_str()
+                .to_owned(),
+        ]
     } else if id == PackId::Csharp {
         vec![inside(&root, "runtime/helper/Narrant.CSharp.Helper.dll")?.into_os_string()]
     } else {
@@ -114,6 +145,8 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
     let mut platforms = Vec::new();
     for platform in control.platforms {
         let allowed = match id {
+            PackId::Python => platform.kind == "python-embedded-stdlib",
+            PackId::TypeScriptJavascript => platform.kind == "typescript-declarations",
             PackId::Java => platform.kind == "java-jdk",
             PackId::Go => platform.kind == "go-sdk",
             PackId::Csharp => platform.kind == "dotnet-reference-assemblies",
@@ -149,7 +182,7 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
             _ => return Err(failure("支持包声明的本机目标环境与语言或宿主不匹配")),
         });
     }
-    if platforms.is_empty() {
+    if platforms.is_empty() && id != PackId::Rust {
         return Err(failure(
             "target_unavailable: 支持包未提供经过验证的目标标准库",
         ));
@@ -170,7 +203,11 @@ pub(crate) fn from_pack(id: PackId, root: &Path) -> Result<NativeLanguageAnalyze
             executable,
             args,
             environment,
-            trusted_roots: vec![root],
+            trusted_roots: vec![if id == PackId::Python {
+                inside(&root, "bin")?
+            } else {
+                root
+            }],
         },
         HelperIdentity {
             helper_id: format!("narrant-{helper}"),
@@ -210,3 +247,34 @@ fn failure(error: impl std::fmt::Display) -> AnalysisError {
 #[cfg(test)]
 #[path = "tests/factory.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/typescript_graph.rs"]
+mod typescript_graph;
+
+/// TS/JS 文件测试开关与 helper 保持一致；全被排除的语言组不启动或准备工具。
+pub(crate) fn typescript_needs_tools(
+    path: &Path,
+    options: super::code_graph::AnalysisOptions,
+) -> bool {
+    options.include_tests
+        || !(path
+            .components()
+            .any(|part| part.as_os_str() == "__tests__")
+            || path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.ends_with(".test") || stem.ends_with(".spec")))
+}
+
+/// Python 文件级测试过滤与 helper 一致，全被排除的语言组不准备或启动支持包。
+pub(crate) fn python_needs_tools(path: &Path, options: super::code_graph::AnalysisOptions) -> bool {
+    options.include_tests
+        || !(path.components().any(|part| part.as_os_str() == "tests")
+            || path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| {
+                    stem.starts_with("test_") || stem.ends_with("_test") || stem == "conftest"
+                }))
+}

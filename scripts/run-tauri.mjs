@@ -30,13 +30,15 @@ export function normalizeUpdaterPublicKey(value) {
   return normalized;
 }
 
-/** 只在正式 build 时把编译期 updater 信任根同时交给 Tauri bundler。 */
+/** 合并 updater 信任根，并保留原始 Tauri 参数。 */
 export function buildTauriArguments(command, args, environment) {
   const cliArguments = [command];
+  const configuration = {};
   if (command === "build" && environment.NARRANT_UPDATER_PUBLIC_KEY) {
     const pubkey = normalizeUpdaterPublicKey(environment.NARRANT_UPDATER_PUBLIC_KEY);
-    cliArguments.push("--config", JSON.stringify({ plugins: { updater: { pubkey } } }));
+    configuration.plugins = { updater: { pubkey } };
   }
+  if (Object.keys(configuration).length) cliArguments.push("--config", JSON.stringify(configuration));
   const normalizedArguments = args[0] === "--" ? args.slice(1) : args;
   return [...cliArguments, ...normalizedArguments];
 }

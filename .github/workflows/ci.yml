@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# 同一 PR 只保留最新提交的完整验收，不再额外触发一套语言包 PR 流水线。
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality-gate.yml
+
+  languages:
+    uses: ./.github/workflows/validate-language-support-packs.yml
+    with:
+      validation_scope: full
+      language: all
+      platform: all
+      upload_artifacts: false
+
+  complete:
+    name: Complete CI
+    if: ${{ always() }}
+    needs: [quality, languages]
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: 确认全部验收成功
+        env:
+          CI_RESULTS: ${{ toJSON(needs) }}
+        # 跳过、取消或缺失结果均不能成为合并成功证据。
+        run: |
+          node --input-type=module -e '
+            const results = JSON.parse(process.env.CI_RESULTS);
+            const required = ["quality", "languages"];
+            for (const name of required) console.log(`${name}: ${results[name]?.result ?? "missing"}`);
+            if (required.some(name => results[name]?.result !== "success")) process.exit(1);
+          '

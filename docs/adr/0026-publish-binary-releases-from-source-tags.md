@@ -1,5 +1,8 @@
 # Publish binary releases from source tags
 
+Status: Superseded by [ADR-0036](0036-use-one-public-github-repository-for-distribution.md) for repository and distribution authority. The following records the historical decision.
+
+
 Narrant treats a stable `vMAJOR.MINOR.PATCH` tag in the private source repository as
 the authoritative release request and version, regardless of which branch contains the
 tagged commit. A release proceeds only when that version matches `package.json`, the

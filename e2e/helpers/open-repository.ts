@@ -36,10 +36,7 @@ export async function setE2ELocale(locale: "zh-CN" | "en") {
     (language) => document.documentElement.lang === language,
     expectedDocumentLanguage,
   ), { timeoutMsg: `界面语言没有稳定切换到 ${locale}` });
-  // i18next 的 Promise 先于 React 订阅者提交；等待两帧，但不把语言生命周期绑定到侧边栏挂载。
-  await browser.executeAsync((done) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => done()));
-  });
+  // 调用方继续等待目标语言的实际控件；后台 WebView 可能暂停动画帧，不能用帧数判断就绪。
 }
 
 /** 通过当前可见的 desktop/offcanvas sidebar 返回 Home。 */

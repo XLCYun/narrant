@@ -34,8 +34,8 @@ fn current_members(job: &WindowsJob) -> io::Result<Vec<u32>> {
     // SAFETY: 固定头部完全落在上面的对齐缓冲区内。
     let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
     let count = info.NumberOfProcessIdsInList as usize;
-    if count > 16 || info.NumberOfAssignedProcesses != info.NumberOfProcessIdsInList {
-        return Err(io::Error::other("小型 Job 夹具的成员列表不完整"));
+    if count > 16 {
+        return Err(io::Error::other("小型 Job 夹具的成员列表长度无效"));
     }
     buffer[HEADER..HEADER + count]
         .iter()
@@ -69,6 +69,44 @@ fn native_windows_suspended_root_is_owned_and_deduplicated() {
     job.terminate_and_wait().unwrap();
     assert_eq!(retained_status(&observed), WAIT_OBJECT_0);
     assert!(!directory.path().join("leaf-ready").exists());
+}
+
+/// 在带工作线程的 Node 根退出期间反复查询，覆盖 Native Helper 的实际退出模式。
+#[test]
+fn native_windows_member_snapshot_tolerates_root_exit() {
+    use crate::child_process::test_support::node_executable;
+
+    for iteration in 0..16 {
+        let mut command = Command::new(node_executable());
+        command.args([
+            "--eval",
+            "globalThis.heap = Buffer.alloc(128 * 1024 * 1024, 1); const { Worker } = require('node:worker_threads'); new Worker('', { eval: true });",
+        ]);
+        let (mut pending, job) = WindowsJob::spawn_suspended(&mut command).unwrap();
+        let child = pending.0.as_mut().unwrap();
+        let observed = child.as_handle().try_clone_to_owned().unwrap();
+        resume_initial_thread(child.id()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        if iteration % 2 == 0 {
+            // 覆盖 Host 收到终结后仍需强制回收的路径；另一半保留自然退出。
+            std::thread::sleep(Duration::from_millis(100));
+            job.terminate_and_wait()
+                .unwrap_or_else(|error| panic!("iteration {iteration}: {error}"));
+        }
+        loop {
+            job.tracker
+                .lock()
+                .unwrap()
+                .supplement(job.raw(), deadline)
+                .unwrap_or_else(|error| panic!("iteration {iteration}: {error}"));
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+        }
+        job.terminate_and_wait().unwrap();
+        assert_eq!(retained_status(&observed), WAIT_OBJECT_0);
+        drop(pending);
+    }
 }
 
 /// 确实错过短命对象时，累计缺口必须失败且重试不能擦掉失败历史。

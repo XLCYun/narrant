@@ -1009,13 +1009,18 @@ fn csharp_real_target_framework_isolation_and_union() {
     }
 }
 
-/// 完整验收调用必须同时提供四个固定 helper，Clang 覆盖 C 与 C++ 两种语言模式。
+/// 完整验收调用必须提供目录中全部已迁移 helper，Clang 覆盖 C 与 C++ 两种模式。
 #[test]
-#[ignore = "require-real-tools: NARRANT_NATIVE_HELPERS_CONFIG 指向四个真实 helper 和固定目标平台"]
+#[ignore = "require-real-tools: NARRANT_NATIVE_HELPERS_CONFIG 指向全部已迁移真实 helper 和固定目标平台"]
 fn all_required_helpers_configured() {
     let configs = config();
-    for key in ["go", "java", "csharp", "clang"] {
-        assert!(configs.contains_key(key), "真实 helper 配置缺少 {key}");
+    let catalog: serde_json::Value =
+        serde_json::from_str(include_str!("../../resources/language-support-packs.json")).unwrap();
+    for definition in catalog["packs"].as_object().unwrap().values() {
+        if let Some(helper) = definition["helperId"].as_str() {
+            let key = helper.strip_prefix("narrant-").expect("固定 helper 名称");
+            assert!(configs.contains_key(key), "真实 helper 配置缺少 {key}");
+        }
     }
 }
 
@@ -1043,13 +1048,268 @@ fn csharp_real_helper_graph_and_diff() {
 /// 真实 Clang C17 后端经 Host 构图和 diff 的验收。
 #[test]
 #[ignore = "require-real-tools: 固定 Clang helper 和目标 resource/headers"]
-fn c_real_helper_graph_and_diff() {
+fn clang_c_real_helper_graph_and_diff() {
     exercise(Mode::C);
 }
 
 /// 真实 Clang C++20 后端经 Host 构图和 diff 的验收。
 #[test]
 #[ignore = "require-real-tools: 固定 Clang helper 和目标 resource/headers"]
-fn cpp_real_helper_graph_and_diff() {
+fn clang_cpp_real_helper_graph_and_diff() {
     exercise(Mode::Cpp);
+}
+
+/// TS/JS 共用一次真实原生请求，公共图保留选集、图外来源、原文和语义 diff。
+#[test]
+#[ignore = "需要真实 TypeScript 原生 helper 配置"]
+fn typescript_real_helper_graph_and_diff() {
+    let configs = config();
+    let configured = configs.get("typescript").expect("缺少 TypeScript helper");
+    let environment = configured
+        .environment
+        .iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect();
+    #[cfg(windows)]
+    let mut environment: BTreeMap<OsString, OsString> = environment;
+    #[cfg(windows)]
+    if !configured
+        .environment
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case("SystemRoot"))
+    {
+        // 真实 Node 测试与生产入口一样保留系统根，不恢复父进程的其他环境。
+        let system_root = std::env::var_os("SystemRoot")
+            .filter(|value| !value.is_empty())
+            .expect("Windows 真实 TypeScript helper 验收需要非空 SystemRoot");
+        environment.insert("SystemRoot".into(), system_root);
+    }
+    let helper = NativeLanguageAnalyzer::new(
+        HelperCommand {
+            executable: configured.executable.clone(),
+            args: configured.args.iter().map(OsString::from).collect(),
+            environment,
+            trusted_roots: configured.trusted_roots.clone(),
+        },
+        HelperIdentity {
+            helper_id: "narrant-typescript".into(),
+            helper_version: "0.1.0".into(),
+            projection_revision: "typescript-source-v1".into(),
+            languages: vec!["typescript".into(), "javascript".into()],
+            profile: "typescript-static-v1".into(),
+        },
+        configured
+            .platforms
+            .iter()
+            .map(|p| Platform {
+                id: p.id.clone(),
+                kind: p.kind.clone(),
+                version: p.version.clone(),
+                root: p.root.clone(),
+                metadata: p.metadata.clone(),
+            })
+            .collect(),
+    );
+    let root = tempfile::tempdir().unwrap();
+    put(root.path(), "main.ts", "import {target} from './target.js'; import {context} from './context'; export function caller(){ target(); context(); Promise.resolve(1); }");
+    put(
+        root.path(),
+        "target.js",
+        "export function target(){ return 1; }",
+    );
+    put(root.path(), "context.ts", "export function context(){}");
+    let input = AnalysisInput {
+        repository_root: root.path().into(),
+        files: vec!["main.ts".into(), "target.js".into()],
+        options: AnalysisOptions::default(),
+    };
+    let before = helper.analyze(&input).unwrap();
+    let (_, caller) = find(&before, "caller", CodeCategory::Callable);
+    assert!(caller
+        .data()
+        .source
+        .as_ref()
+        .unwrap()
+        .contains("Promise.resolve"));
+    assert!(caller.data().references.iter().any(
+        |r| matches!(&r.target, ReferenceTarget::Node(id) if id.0.starts_with("javascript:"))
+    ));
+    assert!(before
+        .external_symbols()
+        .values()
+        .any(|s| s.name == "context" && s.scope == SymbolScope::Repository));
+    assert!(before
+        .external_symbols()
+        .values()
+        .any(|s| s.name == "resolve" && s.scope == SymbolScope::Dependency));
+    put(
+        root.path(),
+        "target.js",
+        "// ordinary\nexport function target ( ) { return 1 ; }",
+    );
+    assert!(before
+        .diff(&helper.analyze(&input).unwrap())
+        .unwrap()
+        .nodes
+        .is_empty());
+    put(
+        root.path(),
+        "target.js",
+        "export function target(){ return 2; }",
+    );
+    let diff = before.diff(&helper.analyze(&input).unwrap()).unwrap();
+    assert_eq!(diff.nodes.len(), 1);
+    assert_eq!(diff.nodes[0].content, Some(ChangeKind::Modified));
+}
+
+/// Rust 优化包通过公开 Host 验证多文件引用、选集、原文与规范化 diff。
+#[test]
+#[ignore = "require-real-tools: 真实 Rust 原生支持包"]
+fn rust_real_helper_graph_and_diff() {
+    let configs = config();
+    let cfg = configs.get("rust").expect("缺少真实 Rust helper");
+    let analyzer = NativeLanguageAnalyzer::new(
+        HelperCommand {
+            executable: cfg.executable.clone(),
+            args: cfg.args.iter().map(OsString::from).collect(),
+            environment: cfg
+                .environment
+                .iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+            trusted_roots: cfg.trusted_roots.clone(),
+        },
+        HelperIdentity {
+            helper_id: "narrant-rust".into(),
+            helper_version: "0.1.0".into(),
+            projection_revision: "rust-source-v1".into(),
+            languages: vec!["rust".into()],
+            profile: "rust-repository-v1".into(),
+        },
+        vec![],
+    );
+    let sandbox = TempDir::new().unwrap();
+    let mut graphs = Vec::new();
+    for (variant, source) in [
+        ("before", "pub fn worker() -> u32 { 1 }"),
+        ("formatted", "// 😀 注释\npub fn worker( ) -> u32 {\n 1\n}"),
+        ("changed", "pub fn worker() -> u32 { 2 }"),
+    ] {
+        let root = sandbox.path().join(variant);
+        fs::create_dir(&root).unwrap();
+        put(&root, "Cargo.toml", "[package]\nname=\"native_fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[lib]\npath=\"lib.rs\"\n");
+        put(&root, "lib.rs", "mod worker; mod hidden; pub fn entry() -> u32 { worker::worker() + hidden::hidden() } #[test] fn check() {} #[cfg(any())] fn inactive() {}");
+        put(&root, "worker.rs", source);
+        put(&root, "hidden.rs", "pub fn hidden() -> u32 { 3 }");
+        let graph = analyzer
+            .analyze(&AnalysisInput {
+                repository_root: root.clone(),
+                files: vec!["lib.rs".into(), "worker.rs".into()],
+                options: Default::default(),
+            })
+            .unwrap();
+        let (_, entry) = find(&graph, "entry", CodeCategory::Callable);
+        let (worker, _) = find(&graph, "worker", CodeCategory::Callable);
+        assert!(entry
+            .data()
+            .references
+            .iter()
+            .any(|reference| reference.semantic == "code.calls"
+                && reference.target == ReferenceTarget::Node(worker.clone())));
+        assert!(entry.data().references.iter().any(|reference| matches!(&reference.target, ReferenceTarget::External { symbol } if graph.external_symbols()[symbol].name=="hidden")));
+        assert!(graph.root().contains.len() == 1);
+        assert!(!root.join("Cargo.lock").exists() && !root.join("target").exists());
+        graphs.push(graph);
+    }
+    assert!(graphs[0].diff(&graphs[1]).unwrap().nodes.is_empty());
+    let changed = graphs[0].diff(&graphs[2]).unwrap();
+    assert_eq!(changed.nodes.len(), 1);
+    assert_eq!(changed.nodes[0].content, Some(ChangeKind::Modified));
+    assert_eq!(
+        changed.nodes[0].id,
+        find(&graphs[0], "worker", CodeCategory::Callable).0.clone()
+    );
+}
+
+/// Python 优化包经公开 Host 验证跨文件调用、标准库身份、原文及语义空白 diff。
+#[test]
+#[ignore = "require-real-tools: 真实 Python 原生支持包"]
+fn python_real_helper_graph_and_diff() {
+    let configs = config();
+    let cfg = configs.get("python").expect("缺少真实 Python helper");
+    let helper = NativeLanguageAnalyzer::new(
+        HelperCommand {
+            executable: cfg.executable.clone(),
+            args: cfg.args.iter().map(OsString::from).collect(),
+            environment: cfg
+                .environment
+                .iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+            trusted_roots: cfg.trusted_roots.clone(),
+        },
+        HelperIdentity {
+            helper_id: "narrant-python".into(),
+            helper_version: "0.1.0".into(),
+            projection_revision: "python-source-v1".into(),
+            languages: vec!["python".into()],
+            profile: "python-static-v1".into(),
+        },
+        cfg.platforms
+            .iter()
+            .map(|platform| Platform {
+                id: platform.id.clone(),
+                kind: platform.kind.clone(),
+                version: platform.version.clone(),
+                root: platform.root.clone(),
+                metadata: platform.metadata.clone(),
+            })
+            .collect(),
+    );
+    let sandbox = TempDir::new().unwrap();
+    let mut graphs = Vec::new();
+    for (variant, source) in [
+        ("before", "def worker(): return 'a  b'\n"),
+        (
+            "formatting",
+            "# 😀 comment\ndef worker( ):\n    return \"a  b\"\n",
+        ),
+        ("changed", "def worker(): return 'a b'\n"),
+    ] {
+        let root = sandbox.path().join(variant);
+        fs::create_dir(&root).unwrap();
+        put(&root,"main.py","from api import worker\nfrom hidden import hidden\ndef entry(): return worker() + hidden() + str(len([]))\n");
+        put(&root, "api.py", source);
+        put(&root, "hidden.py", "def hidden(): return 1\n");
+        let graph = helper
+            .analyze(&AnalysisInput {
+                repository_root: root,
+                files: vec!["main.py".into(), "api.py".into()],
+                options: Default::default(),
+            })
+            .unwrap();
+        let (_, entry) = find(&graph, "entry", CodeCategory::Callable);
+        let (worker, node) = find(&graph, "worker", CodeCategory::Callable);
+        assert_eq!(
+            node.data().source.as_deref().unwrap().trim_end(),
+            source.trim_start_matches("# 😀 comment\n").trim_end()
+        );
+        assert!(entry
+            .data()
+            .references
+            .iter()
+            .any(|reference| reference.target == ReferenceTarget::Node(worker.clone())));
+        assert!(entry.data().references.iter().any(|reference|matches!(&reference.target,ReferenceTarget::External {symbol} if graph.external_symbols()[symbol].name=="len" && symbol.starts_with("python:stdlib:ty-0.0.84:"))));
+        assert!(entry.data().references.iter().any(|reference|matches!(&reference.target,ReferenceTarget::External {symbol} if graph.external_symbols()[symbol].name=="hidden")));
+        assert_eq!(graph.root().contains.len(), 2);
+        graphs.push(graph);
+    }
+    assert!(graphs[0].diff(&graphs[1]).unwrap().nodes.is_empty());
+    let changed = graphs[0].diff(&graphs[2]).unwrap();
+    assert_eq!(changed.nodes.len(), 1);
+    assert_eq!(changed.nodes[0].content, Some(ChangeKind::Modified));
+    assert_eq!(
+        changed.nodes[0].id,
+        find(&graphs[0], "worker", CodeCategory::Callable).0.clone()
+    );
 }

@@ -15,7 +15,7 @@ pub(crate) struct StructureReviewSettings {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub(crate) struct RustAnalysisSettings {
-    pub dependency_scope: crate::structure_review::rust_analyzer::RustDependencyScope,
+    pub dependency_scope: crate::structure_review::code_graph::RustDependencyScope,
 }
 
 /// Narrant 的持久化主题偏好。

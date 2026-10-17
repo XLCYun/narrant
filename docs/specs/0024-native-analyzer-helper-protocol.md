@@ -1,6 +1,10 @@
 # 原生语言分析辅助进程：公共协议与验收
 
-状态：已实现并完成新增原生链路的限定双平台验收，2026-10-03。
+状态：公共 Host 已实现。以下 2026-10-03 的双平台证据仅覆盖当时新增的四套 helper。
+2026-10-11 按 [0025](0025-migrate-existing-analyzers-to-native-helpers.md) 将 Rust、TS/JS、Python
+接入同一 Host，七套生产 helper 均使用本协议，旧 LSP 已退役。2026-10-17 已完成
+本地 macOS ARM64 验收、整分支审查和七套 helper 的最终 GitHub-hosted 双平台语言 CI；
+证据见[迁移验证](../research/existing-native-helper-migration-validation.md)，支持包仍未发布。
 公共 Rust Host、四种 helper、应用接入、真实安装与 CodeGraph/diff 在 macOS ARM64 和 Windows x64 通过。
 共享 WindowsJob 已修复并统一接入；`83d5642` 的生产路径完整双平台矩阵四组全部通过。
 精确范围与旧缺陷见[跨平台记录](../research/native-crossplatform-validation.md)和
@@ -11,7 +15,10 @@
 
 Java、Go、C#、C/C++ 使用各自原生分析 API，通过统一辅助进程接口生成 Code Graph。
 Rust 不再为这些语言另写一套 AST 到图的映射，也不强制追加 LSP 阶段。
-现有 Rust、TS/JS、Python 分析器不迁移；调用方仍得到 `Result<CodeGraph, AnalysisError>`。
+Rust、TS/JS、Python 也按 [ADR-0035](../adr/0035-migrate-existing-analyzers-to-native-apis.md)
+直接使用原生库，通过同一公共 Host 返回 `Result<CodeGraph, AnalysisError>`。
+它们的兼容配置、Rust 三档依赖范围和 Python 固定 stdlib 由 0025 及原语言规格约束；
+不得将新增四语言的仅仓库/平台范围误套到 Rust 的显式全部依赖选项。
 
 本规格承接 [ADR-0034](../adr/0034-use-native-analyzer-helpers-for-new-languages.md)、
 [公共图契约](0018-structure-review-code-graph.md)、[关系契约](0018b-code-relationships.md)、
@@ -212,7 +219,9 @@ evidence 中才能解释的配置 ID。初始错误代码：
 
 ## 只读、工具与工作区生命周期
 
-- helper 只能读本侧仓库源码/静态配置和已批准的目标平台声明；排除项目依赖下载及已有业务缓存。
+- Java/Go/C#/C-C++、TS/JS 与 Python 只读本侧仓库源码/静态配置和已批准标准声明，
+  排除项目依赖下载及已有业务缓存。Rust 保留 0025 的三档范围，显式全部依赖请求通过
+  类型化 `RustDependencyScope` 和 profile 环境白名单 保留用户网络政策及原生依赖加载；其他两档始终离线。
   仓内 vendor 源码和安装目录由语言规则区别，不能简单按目录位置放行。
 - 编译命令、项目配置、response file 只作为受限数据解析；不通过 shell 执行原命令。
   插件加载、注解处理、源码生成、隐式工具链下载以及被分析程序执行均被排除。
@@ -224,13 +233,14 @@ evidence 中才能解释的配置 ID。初始错误代码：
   在没有通过替代方案验收前不得发布；缺目标工具时明确失败。
 - 不执行项目逻辑也不等于操作系统沙箱。实际隔离机制按平台验证，本规格不声称已有通用沙箱。
 
-LSP/Python 与原生 helper 共用 `child_process::ProcessTree`，统一启动、管道转交、退出与回收；
+七套原生 helper 共用 `child_process::ProcessTree`，统一启动、管道转交、退出与回收；
 调用方仍负责自己的协议、超时和取消策略。Windows 内部使用 Job，Unix 内部使用独立进程组。
 helper 仍可创建后代；Windows 在执行前建立 Job 与成员跟踪，清理时才禁止创建新成员。
 成功判据要求持续持有的唯一进程对象全部退出，并与最终累计成员数相符；无法证明完整性时明确失败，
 不能仅凭 Job 活跃数或当前成员列表为空宣称回收成功。平台异常导致清理失败时仍须回收直接 Child，
 并保留清理错误，不能将其解释为全员已经退出。Unix 在退出宽限前保存组成员快照，终止后等待组与
-已保存成员退出。平台回归集中在共享模块；LSP 与 helper 保留各自协议和接入验证。
+已保存成员退出。平台回归集中在共享模块；公共 Native Host 保留协议和接入验证。
+快速 Windows crate 通过 `#[path]` 编译同一个生产 owner 及其平台测试，不复制实现。
 共享 Windows 完成次序缺陷已在此前修复，本轮只整合平台所有权接口与重复测试夹具；证据见跨平台记录。
 
 状态顺序为 `starting → ready → running → terminal → reaped`。helper 启动初始化失败时尚无请求

@@ -42,7 +42,8 @@ fn native_groups_are_merged_once_each() {
         let observed = observed.clone();
         application.analyzers.native.insert(
             id,
-            Arc::new(move |input, _| {
+            Arc::new(move |input, _, scope| {
+                assert_eq!(scope, RustDependencyScope::StandardLibrary);
                 observed.lock().unwrap().push((
                     id,
                     input.repository_root.clone(),
@@ -126,7 +127,7 @@ fn native_failure_cancels_and_joins_other_language_workers() {
     let (go_started, go_reaped) = (started.clone(), reaped.clone());
     application.analyzers.native.insert(
         PackId::Go,
-        Arc::new(move |_, cancelled| {
+        Arc::new(move |_, cancelled, _| {
             go_started.wait();
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while !cancelled() && std::time::Instant::now() < deadline {
@@ -138,7 +139,7 @@ fn native_failure_cancels_and_joins_other_language_workers() {
     );
     application.analyzers.native.insert(
         PackId::Java,
-        Arc::new(move |_, _| {
+        Arc::new(move |_, _, _| {
             started.wait();
             Err(AnalysisError::new("Java 原始失败"))
         }),
@@ -161,4 +162,42 @@ fn native_failure_cancels_and_joins_other_language_workers() {
     .unwrap_err();
     assert_eq!(error.detail, "Java 原始失败");
     assert!(reaped.load(Ordering::Acquire));
+}
+
+/// 预留的 Native 调用通道逐档传递 Rust scope 与测试过滤，不提前注册生产 Rust 工厂。
+#[test]
+fn native_callback_preserves_each_rust_scope_and_test_option() {
+    for scope in [
+        RustDependencyScope::RepositoryOnly,
+        RustDependencyScope::StandardLibrary,
+        RustDependencyScope::AllDependencies,
+    ] {
+        let repository = tempfile::tempdir().unwrap();
+        let mut application = StructureReview::new(Arc::new(|_, _, _| panic!("旧入口不应执行")));
+        application.analyzers.native.insert(
+            PackId::Rust,
+            Arc::new(move |input, _, actual| {
+                assert_eq!(actual, scope);
+                assert!(!input.options.include_tests);
+                assert_eq!(input.files, vec![PathBuf::from("lib.rs")]);
+                Ok(single_node_graph("rust:main", "rust", vec![]))
+            }),
+        );
+        let mut files = SideFiles::default();
+        files.push(Some(LanguageGroup::Native(PackId::Rust)), "lib.rs".into());
+        let cancelled: CancellationCheck = Arc::new(|| false);
+        let graph = analyze_side(
+            &application.analyzers,
+            repository.path(),
+            files,
+            AnalysisOptions {
+                include_tests: false,
+            },
+            &cancelled,
+            scope,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(graph.node(&NodeId("rust:main".into())).is_some());
+    }
 }

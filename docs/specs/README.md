@@ -17,8 +17,15 @@ with dedicated compatibility acceptance for 3.7–3.9).
 Native helpers for Java, Go, C#, and C/C++ are specified in
 [0024 — Common helper protocol](0024-native-analyzer-helper-protocol.md) and
 [0024a — Language profiles and acceptance](0024a-native-language-analysis-profiles.md)
-(engineering drafts; common architecture and union semantics accepted, implementation
-and compatibility validation pending).
+(accepted and implemented; macOS ARM64 / Windows x64 language acceptance complete,
+packages unpublished).
+
+Migration of the existing Rust, TypeScript/JavaScript, and Python analyzers is specified
+in [0025 — Migrate existing analyzers to Native Helpers](0025-migrate-existing-analyzers-to-native-helpers.md)
+(accepted; implementation, review, optimized packages, installation, Review and final
+GitHub-hosted macOS ARM64 / Windows x64 language acceptance complete; packages unpublished).
+Existing capabilities and configuration behavior remain;
+helpers use direct native APIs without LSP and migrate one language implementation at a time.
 
 ## Conventions
 

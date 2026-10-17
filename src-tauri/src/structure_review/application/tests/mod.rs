@@ -329,6 +329,20 @@ fn skips_empty_groups_and_rejects_merge_collisions() {
     )
     .unwrap();
     assert!(empty.root().contains.is_empty());
+    let excluded = analyze_side(
+        &unavailable,
+        repository.path(),
+        SideFiles {
+            typescript: vec!["a.test.ts".into(), "__tests__/a.js".into()],
+            ..Default::default()
+        },
+        AnalysisOptions::default(),
+        &not_cancelled,
+        RustDependencyScope::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert!(excluded.root().contains.is_empty());
 
     let rust: Arc<AnalyzeGraph> =
         Arc::new(|_, _, _| Ok(single_node_graph("collision", "rust", vec![])));
@@ -847,23 +861,42 @@ async fn recovery_removes_interrupted_before_worktree() {
     );
 }
 
-/// 从 Review 固定提交到真实 Rust LSP，再到前端 DTO 的完整生产调用链。
+/// 从真实安装的 Rust 包经生产支持包工厂、Review 固定提交到前端 DTO。
 #[tokio::test]
-#[ignore = "需要显式配置 rust-analyzer，串行运行且避免测试进程占用 Cargo 锁"]
-async fn real_server_builds_review_structure_comparison() {
-    use crate::structure_review::{
-        code_graph::LanguageAnalyzer, rust_analyzer::RustLanguageAnalyzer,
-    };
+#[ignore = "需要真实 NARRANT_NATIVE_PACKS Rust 优化支持包"]
+async fn real_rust_pack_flows_through_review_lifecycle_to_dto() {
+    use httpmock::prelude::*;
     let fixture = Fixture::new().await;
-    let executable = std::env::var_os("NARRANT_RUST_ANALYZER").expect("需要提供 rust-analyzer");
-    let analyzer = RustLanguageAnalyzer::new(executable);
-    let application = StructureReview::new(Arc::new(move |input, cancelled, dependency_scope| {
-        analyzer
-            .clone()
-            .with_cancellation(cancelled)
-            .with_dependency_scope(dependency_scope)
-            .analyze(input)
-    }));
+    let artifacts =
+        PathBuf::from(std::env::var_os("NARRANT_NATIVE_PACKS").expect("真实 Rust 包目录"));
+    let target = if cfg!(windows) {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "aarch64-apple-darwin"
+    };
+    let catalog: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../resources/language-support-packs.json"
+    ))
+    .unwrap();
+    let version = catalog["packs"]["rust"]["version"].as_str().unwrap();
+    let server = MockServer::start();
+    for name in ["manifest.json", "pack.tar.gz"] {
+        let bytes =
+            std::fs::read(artifacts.join("rust").join(version).join(target).join(name)).unwrap();
+        server.mock(|when, then| {
+            when.path(format!("/language-pack-rust-v{version}/{target}-{name}"));
+            then.body(bytes);
+        });
+    }
+    let packs = crate::language_support::LanguageSupportPacks::with_test_origin(
+        fixture._data.path().join("packs"),
+        server.base_url(),
+        target.into(),
+    )
+    .unwrap();
+    let application =
+        StructureReview::new(Arc::new(|_, _, _| panic!("生产支持包应装配 Rust 分析器")))
+            .with_support_packs(packs.clone());
     let result = application
         .analyze(
             &fixture.lifecycle,
@@ -922,15 +955,16 @@ async fn real_server_builds_review_structure_comparison() {
 
 /// 从真实 Review 生命周期经固定 TS/JS 服务到 DTO，保留本地 Node 目标、原文与结构差异。
 #[tokio::test]
-#[ignore = "需要固定 NARRANT_TYPESCRIPT_NODE/NARRANT_TYPESCRIPT_RUNTIME；直接运行测试二进制"]
+#[ignore = "需要固定 NARRANT_TYPESCRIPT_PACK 原生支持包"]
 async fn real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto() {
-    use crate::structure_review::{
-        code_graph::LanguageAnalyzer, typescript_analyzer::TypeScriptLanguageAnalyzer,
-    };
+    use crate::structure_review::{code_graph::LanguageAnalyzer, native_languages};
     let fixture = Fixture::typescript_javascript().await;
-    let analyzer = TypeScriptLanguageAnalyzer::default();
+    let root = std::env::var_os("NARRANT_TYPESCRIPT_PACK").expect("真实原生 TS 包目录");
+    let analyzer =
+        native_languages::from_pack(PackId::TypeScriptJavascript, std::path::Path::new(&root))
+            .unwrap();
     let application = StructureReview::new(Arc::new(|_, _, _| {
-        panic!("TS/JS-only Review 不应启动 rust-analyzer")
+        panic!("TS/JS-only Review 不应启动 Rust helper")
     }))
     .with_typescript(Arc::new(move |input, cancelled| {
         analyzer.clone().with_cancellation(cancelled).analyze(input)

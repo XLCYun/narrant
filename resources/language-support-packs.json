@@ -2,27 +2,25 @@
   "schemaVersion": 1,
   "packs": {
     "rust": {
-      "version": "1.0.0",
-      "rustAnalyzer": "2026-09-07",
+      "version": "1.1.0",
+      "published": false,
       "sourceCommit": "9074e9b4c6bc31d7986ccf4e22d18af70e5508da",
-      "upstreamSha256": {
-        "aarch64-apple-darwin": "16e9b2af9db7c0ce015ffe88f85db27669b05c84887a59c737d697d2c5f8d349",
-        "x86_64-pc-windows-msvc": "cd3dddd580edac199c5e84c6cceb3addea32769c25cb6b597024a200b3359b05"
-      }
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-rust",
+      "projectionRevision": "rust-source-v1",
+      "profile": "rust-repository-v1",
+      "buildToolchain": "1.98.0",
+      "targetStandardLibrary": "local-project-rust-sysroot",
+      "verifiedTargets": []
     },
     "typescript-javascript": {
-      "version": "1.0.0",
+      "version": "1.1.0",
       "node": "24.18.0",
       "upstreamSha256": {
         "aarch64-apple-darwin": "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1",
         "x86_64-pc-windows-msvc": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821"
       },
       "packages": [
-        {
-          "name": "typescript-language-server",
-          "version": "6.0.0",
-          "integrity": "sha512-LXtzY3UZGfghWA5eRU6/T5j1+YiGRgy14mR3GOKyTKlE1op1TYKQnLVxwBsmnXeDhGLuvzZyIHBAqvrekAITYQ=="
-        },
         {
           "name": "typescript",
           "version": "6.0.3",
@@ -38,33 +36,26 @@
           "version": "6.21.0",
           "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="
         }
-      ]
+      ],
+      "published": false,
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-typescript",
+      "projectionRevision": "typescript-source-v1",
+      "profile": "typescript-static-v1",
+      "verifiedTargets": []
     },
     "python": {
-      "version": "1.0.0",
+      "version": "1.1.0",
       "ty": "0.0.84",
       "sourceCommit": "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a",
-      "upstreamSha256": {
-        "aarch64-apple-darwin": "c65c09f27bcef726c0b043dcee8d0f1e578bd1936799e5bc447235cbc3e19d91",
-        "x86_64-pc-windows-msvc": "e4b3c7cd30ff8b4ee4c2a62621f293341ad3c89fb3e7c6e4d2686150a4dbcf08"
-      },
-      "licenses": [
-        {
-          "name": "ty-LICENSE",
-          "url": "https://raw.githubusercontent.com/astral-sh/ty/0.0.84/LICENSE",
-          "sha256": "860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c"
-        },
-        {
-          "name": "ruff-LICENSE",
-          "url": "https://raw.githubusercontent.com/astral-sh/ruff/11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a/LICENSE",
-          "sha256": "2597d854122b77ddc71971564ca2350a37608575ce324adc5650a2b2051c8f18"
-        },
-        {
-          "name": "typeshed-LICENSE",
-          "url": "https://raw.githubusercontent.com/astral-sh/ruff/11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a/crates/ty_vendored/vendor/typeshed/LICENSE",
-          "sha256": "295f8538c94ae5c3043301cf7cff1c852dab6a786a8ddee471e061b40d5ecabe"
-        }
-      ]
+      "published": false,
+      "helperVersion": "0.1.0",
+      "helperId": "narrant-python",
+      "projectionRevision": "python-source-v1",
+      "profile": "python-static-v1",
+      "buildToolchain": "1.98.0",
+      "targetStandardLibrary": "embedded-typeshed",
+      "verifiedTargets": []
     },
     "java": {
       "version": "0.1.0",

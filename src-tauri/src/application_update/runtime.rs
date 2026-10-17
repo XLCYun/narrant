@@ -45,7 +45,7 @@ impl Clock for SystemClock {
     }
 }
 
-/// 保存有界 trusted metadata adapter 返回的候选及其领域 operation identity。
+/// 保存领域核心已批准的下载候选及下载编号，检查编号不作为下载凭据。
 struct PendingUpdate {
     operation_id: UpdateOperationId,
     release: StableRelease,
@@ -193,6 +193,22 @@ impl ApplicationUpdateRuntime {
                 controller.handle(convergence).ok()?
             }
         };
+        // 检查、首次下载和每次重试都有独立编号；只绑定核心实际批准的下载副作用。
+        for effect in &output.effects {
+            if let UpdateEffect::StartDownload {
+                operation_id,
+                release,
+            } = effect
+            {
+                *self
+                    .pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PendingUpdate {
+                    operation_id: *operation_id,
+                    release: release.clone(),
+                });
+            }
+        }
         self.diagnostics.record_snapshot(&output.snapshot);
         Some(output)
     }
@@ -341,13 +357,6 @@ impl ApplicationUpdateRuntime {
         };
         match result {
             Ok(Some(release)) => {
-                *self
-                    .pending
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PendingUpdate {
-                    operation_id,
-                    release: release.clone(),
-                });
                 self.dispatch(
                     app,
                     UpdateInput::CheckSucceeded {
@@ -400,6 +409,20 @@ impl ApplicationUpdateRuntime {
         );
     }
 
+    /// 只返回当前下载任务绑定的可信候选，供实际下载入口复核。
+    fn pending_release(
+        &self,
+        operation_id: UpdateOperationId,
+        release: &StableRelease,
+    ) -> Option<StableRelease> {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|pending| pending.operation_id == operation_id && &pending.release == release)
+            .map(|pending| pending.release.clone())
+    }
+
     /// 只下载同一 trusted builder 为当前 operation 返回的候选，并流式提交 staging。
     async fn download_pending<R: tauri::Runtime>(
         self: Arc<Self>,
@@ -408,14 +431,7 @@ impl ApplicationUpdateRuntime {
         release: StableRelease,
         cancellation: &CancellationToken,
     ) {
-        let pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .filter(|pending| pending.operation_id == operation_id && pending.release == release)
-            .map(|pending| pending.release.clone());
-        let Some(trusted_release) = pending else {
+        let Some(trusted_release) = self.pending_release(operation_id, &release) else {
             self.fail_download(
                 app,
                 operation_id,

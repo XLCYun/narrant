@@ -124,7 +124,13 @@ fn invoke_explain(
             cmd: "explain_review_file_change".into(),
             callback: tauri::ipc::CallbackFn(1),
             error: tauri::ipc::CallbackFn(2),
-            url: "tauri://localhost".parse().unwrap(),
+            url: if cfg!(windows) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            }
+            .parse()
+            .unwrap(),
             body: tauri::ipc::InvokeBody::Json(payload),
             headers: Default::default(),
             invoke_key: tauri::test::INVOKE_KEY.to_owned(),

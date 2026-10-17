@@ -8,7 +8,19 @@ status: accepted
 源码映射和验收输入。共同架构和单图并集语义已经由
 [ADR-0034](../adr/0034-use-native-analyzer-helpers-for-new-languages.md) 确认；
 以下记录已实现的固定 profile，**没有完成验收的版本、工程形态和平台不构成发布承诺**。
-Rust、TypeScript/JavaScript、Python 的既有实现不变。
+2026-10-11 的 [ADR-0035](../adr/0035-migrate-existing-analyzers-to-native-apis.md) 与
+[0025](0025-migrate-existing-analyzers-to-native-helpers.md) 已将 Rust、TS/JS、Python
+纳入同一公共 Host；七套 helper 的生产协议统一，旧 LSP 与独立 Host parser 已退役。
+后三语言 profile 及兼容边界见下表；本页后续四语言记录保留其独立目标发现规则。
+
+| helper | 固定 profile / projection | 目标与兼容规格 |
+| --- | --- | --- |
+| Rust | `rust-repository-v1`、`rust-standard-library-v1`、`rust-all-dependencies-v1` / `rust-source-v1` | 用户已有项目工具链；仅仓库、标准库、全部依赖三档，见 [0019](0019-rust-language-analyzer.md) |
+| TS/JS | `typescript-static-v1` / `typescript-source-v1` | 固定 TypeScript 6.0.3 和 Node 声明；既有静态配置，见 [0021](0021-typescript-language-analyzer.md) |
+| Python | `python-static-v1` / `python-source-v1` | 固定 ty 0.0.84 内嵌 typeshed；3.7–3.14，见 [0023](0023-python-language-analyzer.md) |
+
+后三语言已完成本地 macOS 验收，最终 Windows x64 与集中七套双平台 CI 尚待完成。
+2026-10-03 的四语言平台结果不能替代本次迁移门禁；支持包仍未发布。
 
 ## 共同输入与发布门槛
 
@@ -40,7 +52,9 @@ Host 传入经校验的目标平台目录 catalog；helper 只能从中匹配 pr
 但不得仅为规避冲突将同一声明复制成带配置 ID 的节点。
 
 项目及依赖提供的构建逻辑、插件、处理器、生成器一律不执行。
-业务 JAR/NuGet/模块缓存/安装目录不自动成为语义上下文；仓库已提交源码按语言归属规则处理。
+下述新增四语言政策不授权业务 JAR/NuGet/模块缓存/安装目录作为语义上下文；
+Rust 的显式全部依赖范围按 0025 和 类型化 `RustDependencyScope` / `NativeProfile` 保留，不能误套该排除规则。
+仓库已提交源码按语言归属规则处理。
 生成器没有运行产生的缺失关系可为 Unresolved；缺少源码清单或必要头文件导致对象不完整则失败。
 只有两侧固定源码、允许的平台声明和受控工具可参与分析，缓存不得跨侧补齐缺失生成物。
 `include_tests=false` 只排除可信静态 source-set/项目元数据或符号证据确认的测试专用对象；
@@ -260,7 +274,9 @@ loader，尚未解决真实 go.mod/go.work 解释、完整标准库、跨版本�
 不再作为产品版本白名单。后续动态目标与跨版本验证以[目标版本发现记录](../research/native-target-version-discovery.md)为准。
 Java 使用单一 JDT 后端，运行 JDK 与目标声明隔离；反例使用 Java17 不提供的 `List.getFirst()`。
 统一 WindowsJob 已接入共享路径，`83d5642` 的产品默认调用链及完整双平台矩阵全部通过；
-其中Windows共享owner6项、Transport2项、LSP13项和真实Python会话3项均实际执行。
+该历史执行包含 Windows 共享 owner6项、Transport2项、LSP13项和真实 Python会话3项。
+后三组旧传输测试已在 0025 迁移后删除；现行平台回归仍编译唯一生产 owner，
+协议、取消与退出由公共 Native Host 和真实 helper 验收覆盖。
 不据此扩展到未测SDK、版本或未执行的quality-gate。具体证据与限制见
 [Java](../research/java-native-implementation.md)、[Go](../research/go-native-implementation.md)、
 [C#](../research/csharp-native-implementation.md)、[C/C++](../research/clang-native-implementation.md)、

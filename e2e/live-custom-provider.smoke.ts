@@ -120,7 +120,7 @@ describe("Custom Provider live smoke", () => {
     const codeFile = await $("button*=z-explain.ts");
     await codeFile.waitForClickable();
     await codeFile.click();
-    const toggle = await $("button=宝宝模式");
+    const toggle = await $("button[aria-label='宝宝模式']");
     await browser.waitUntil(async () => await toggle.getAttribute("aria-disabled") === "false");
     await toggle.click();
 

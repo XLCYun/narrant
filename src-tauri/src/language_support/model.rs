@@ -17,6 +17,17 @@ pub(crate) enum PackId {
 }
 
 impl PackId {
+    /// 只有已接通生产工厂的语言才能进入真实 Native 支持包验收。
+    pub const NATIVE_MIGRATED: &'static [Self] = &[
+        Self::Rust,
+        Self::Python,
+        Self::TypeScriptJavascript,
+        Self::Java,
+        Self::Go,
+        Self::Csharp,
+        Self::CCpp,
+    ];
+
     /// 稳定标识同时用于清单和应用拥有的相对目录。
     pub fn slug(self) -> &'static str {
         match self {
@@ -34,11 +45,15 @@ impl PackId {
     pub fn required(self, target: &str) -> Vec<&'static str> {
         let windows = target == "x86_64-pc-windows-msvc";
         match self {
-            Self::Rust => vec![if windows {
-                "bin/rust-analyzer.exe"
-            } else {
-                "bin/rust-analyzer"
-            }],
+            Self::Rust => vec![
+                "control/native.json",
+                "licenses/Rust-dependencies.json",
+                if windows {
+                    "bin/narrant-rust.exe"
+                } else {
+                    "bin/narrant-rust"
+                },
+            ],
             Self::Java => vec![
                 "control/native.json",
                 if windows {
@@ -78,17 +93,27 @@ impl PackId {
                 },
             ],
             Self::Python => vec![
-                if windows { "bin/ty.exe" } else { "bin/ty" },
-                "control/ty.toml",
-                "licenses/ty-LICENSE",
+                if windows {
+                    "bin/narrant-python.exe"
+                } else {
+                    "bin/narrant-python"
+                },
+                "control/native.json",
+                "licenses/Python-dependencies.json",
                 "licenses/ruff-LICENSE",
                 "licenses/typeshed-LICENSE",
             ],
             Self::TypeScriptJavascript => vec![
                 if windows { "bin/node.exe" } else { "bin/node" },
-                "runtime/typescript/lib/tsserver.js",
+                "control/native.json",
+                "runtime/helper/main.mjs",
+                "runtime/helper/analyze.mjs",
+                "runtime/helper/projection.mjs",
+                "runtime/helper/config.mjs",
+                "runtime/helper/workspace.mjs",
+                "runtime/helper/syntax.mjs",
+                "runtime/typescript/lib/lib.d.ts",
                 "runtime/typescript/lib/typescript.js",
-                "runtime/typescript-language-server/lib/cli.mjs",
                 "runtime/@types/node/index.d.ts",
                 "runtime/undici-types/index.d.ts",
             ],

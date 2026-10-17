@@ -228,53 +228,30 @@ impl JobTracker {
 
     /// 精确 Job 列表补捕通知尚未覆盖的对象；查不到的历史成员仍由累计计数发现。
     pub fn supplement(&self, job: HANDLE, deadline: Instant) -> io::Result<()> {
-        const HEADER: usize =
-            offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / size_of::<usize>();
-        let mut buffer = vec![0usize; HEADER + 64];
-        loop {
-            if Instant::now() >= deadline {
-                return Err(timeout());
-            }
+        let pids = query_process_ids(deadline, |buffer| {
             // SAFETY: usize 缓冲区满足结构对齐，包含固定头部和可变长 PID 空间。
-            let success = unsafe {
+            if unsafe {
                 QueryInformationJobObject(
                     job,
                     JobObjectBasicProcessIdList,
                     buffer.as_mut_ptr().cast(),
-                    (buffer.len() * size_of::<usize>()) as u32,
+                    std::mem::size_of_val(buffer) as u32,
                     ptr::null_mut(),
                 )
-            };
-            let error = io::Error::last_os_error();
-            // SAFETY: 固定头部位于有效且正确对齐的缓冲区内。
-            let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
-            if success == 0 && error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
-                return Err(error);
+            } == 0
+            {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
             }
-            if success == 0 || info.NumberOfProcessIdsInList < info.NumberOfAssignedProcesses {
-                let capacity = (info.NumberOfAssignedProcesses as usize).max(buffer.len() * 2);
-                if capacity > MAX_PROCESSES {
-                    return Err(io::Error::other("Windows Job 成员列表超限"));
-                }
-                buffer.resize(HEADER + capacity, 0);
-                continue;
+        })?;
+        for pid in pids {
+            if Instant::now() >= deadline {
+                return Err(timeout());
             }
-            let count = info.NumberOfProcessIdsInList as usize;
-            if count > buffer.len() - HEADER {
-                return Err(io::Error::other("Windows Job 成员列表长度无效"));
-            }
-            for raw_pid in &buffer[HEADER..HEADER + count] {
-                if Instant::now() >= deadline {
-                    return Err(timeout());
-                }
-                capture(
-                    &self.ledger,
-                    job,
-                    u32::try_from(*raw_pid).map_err(io::Error::other)?,
-                )?;
-            }
-            return Ok(());
+            capture(&self.ledger, job, pid)?;
         }
+        Ok(())
     }
 
     /// 覆盖等待结束后才请求停止；已经取出的消息必须处理完才能退出。
@@ -443,6 +420,55 @@ fn watch(
         }
     }
 }
+
+/// 查询可变长 PID 快照；可重放系统返回值，避免回归依赖进程退出的微小时序。
+fn query_process_ids(
+    deadline: Instant,
+    mut query: impl FnMut(&mut [usize]) -> io::Result<()>,
+) -> io::Result<Vec<u32>> {
+    const HEADER: usize =
+        offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / size_of::<usize>();
+    let mut buffer = vec![0usize; HEADER + 64];
+    loop {
+        if Instant::now() >= deadline {
+            return Err(timeout());
+        }
+        let success = match query(&mut buffer) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(ERROR_MORE_DATA as i32) => false,
+            Err(error) => return Err(error),
+        };
+        // SAFETY: 固定头部位于有效且正确对齐的缓冲区内。
+        let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+        // Windows 在退出期间会成功返回 assigned > listed 的快照，这不代表空间不足。
+        // 仅 ERROR_MORE_DATA 触发扩容；完整回收仍由准确句柄和累计 TotalProcesses 核对。
+        if !success {
+            let capacity = (info.NumberOfAssignedProcesses as usize).max(buffer.len() * 2);
+            if capacity > MAX_PROCESSES {
+                return Err(io::Error::other(format!(
+                    "Windows Job 成员列表超限：查询成功 {success}，分配 {}，返回 {}，容量 {}",
+                    info.NumberOfAssignedProcesses,
+                    info.NumberOfProcessIdsInList,
+                    buffer.len() - HEADER,
+                )));
+            }
+            buffer.resize(HEADER + capacity, 0);
+            continue;
+        }
+        let count = info.NumberOfProcessIdsInList as usize;
+        if count > buffer.len() - HEADER {
+            return Err(io::Error::other("Windows Job 成员列表长度无效"));
+        }
+        return buffer[HEADER..HEADER + count]
+            .iter()
+            .map(|pid| u32::try_from(*pid).map_err(io::Error::other))
+            .collect();
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/windows_tracking.rs"]
+mod tests;
 
 /// 所有阶段使用同一错误类型表达清理截止时间耗尽。
 fn timeout() -> io::Error {

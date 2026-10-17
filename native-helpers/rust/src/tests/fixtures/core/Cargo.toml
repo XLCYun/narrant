@@ -1,0 +1,10 @@
+[package]
+name = "native_core_fixture"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = ["macros"]
+
+[dependencies]
+marker_macros = { path = "macros" }

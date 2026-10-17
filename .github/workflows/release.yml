@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.value }}
@@ -23,6 +23,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - name: 校验稳定版本标签与版本声明
         id: version
         env:
@@ -45,7 +49,7 @@ jobs:
   macos:
     needs: [validate, quality-gate]
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 180
     env:
       NARRANT_GITHUB_CLIENT_ID: ${{ vars.NARRANT_GITHUB_CLIENT_ID }}
       NARRANT_GITHUB_APP_SLUG: ${{ vars.NARRANT_GITHUB_APP_SLUG }}
@@ -54,12 +58,14 @@ jobs:
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      NARRANT_UPDATER_ENDPOINT: https://updates.cyunlab.com/narrant/channels/stable/latest.json
+      NARRANT_UPDATER_ENDPOINT: https://github.com/XLCYun/narrant/releases/latest/download/latest.json
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
       NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
       NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: 在构建前校验 updater trust 配置
         shell: bash
         run: |
@@ -71,7 +77,7 @@ jobs:
           if [[ "$NARRANT_RELEASE_SIGNING_PUBLIC_KEY" != "$NARRANT_UPDATER_PUBLIC_KEY" ]]; then
             test "$NARRANT_UPDATER_BRIDGE_TAG" = "$GITHUB_REF_NAME"
           fi
-          [[ "$NARRANT_UPDATER_ENDPOINT" == "https://updates.cyunlab.com/narrant/channels/stable/latest.json" ]] || {
+          [[ "$NARRANT_UPDATER_ENDPOINT" == "https://github.com/XLCYun/narrant/releases/latest/download/latest.json" ]] || {
             echo "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。" >&2
             exit 1
           }
@@ -85,7 +91,8 @@ jobs:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
       - run: pnpm install --frozen-lockfile
       - name: 导入 Developer ID 证书和公证密钥
         env:
@@ -104,6 +111,7 @@ jobs:
           printf '%s' "$APPLE_API_PRIVATE_KEY" | openssl base64 -d -A -out "$api_key"
           chmod 600 "$certificate" "$api_key"
 
+          security list-keychains -d user > "$RUNNER_TEMP/narrant-signing-keychains.txt"
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
@@ -244,21 +252,45 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
 
+      - name: 恢复 CI 钥匙串并删除本次签名凭据
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os, pathlib, shlex, subprocess
+          temporary = pathlib.Path(os.environ['RUNNER_TEMP'])
+          previous = temporary / 'narrant-signing-keychains.txt'
+          keychain = temporary / 'narrant-signing.keychain-db'
+          try:
+              if previous.exists():
+                  subprocess.run(['security', 'list-keychains', '-d', 'user', '-s', *shlex.split(previous.read_text())], check=True)
+          finally:
+              try:
+                  if keychain.exists():
+                      subprocess.run(['security', 'delete-keychain', str(keychain)], check=True)
+              finally:
+                  (temporary / 'developer-id.p12').unlink(missing_ok=True)
+                  (temporary / ('AuthKey_' + os.environ['APPLE_API_KEY'] + '.p8')).unlink(missing_ok=True)
+          previous.unlink(missing_ok=True)
+          PYTHON
+
   windows:
     needs: [validate, quality-gate]
-    runs-on: windows-latest
-    timeout-minutes: 60
+    runs-on: windows-2022
+    timeout-minutes: 180
     env:
       NARRANT_GITHUB_CLIENT_ID: ${{ vars.NARRANT_GITHUB_CLIENT_ID }}
       NARRANT_GITHUB_APP_SLUG: ${{ vars.NARRANT_GITHUB_APP_SLUG }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      NARRANT_UPDATER_ENDPOINT: https://updates.cyunlab.com/narrant/channels/stable/latest.json
+      NARRANT_UPDATER_ENDPOINT: https://github.com/XLCYun/narrant/releases/latest/download/latest.json
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
       NARRANT_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.NARRANT_RELEASE_SIGNING_PUBLIC_KEY }}
       NARRANT_UPDATER_BRIDGE_TAG: ${{ vars.NARRANT_UPDATER_BRIDGE_TAG }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: 在构建前校验 updater trust 配置
         shell: pwsh
         run: |
@@ -278,7 +310,7 @@ jobs:
               ($env:NARRANT_UPDATER_BRIDGE_TAG -ne $env:GITHUB_REF_NAME)) {
             throw "updater key bridge 缺少 exact tag 授权"
           }
-          if ($env:NARRANT_UPDATER_ENDPOINT -ne "https://updates.cyunlab.com/narrant/channels/stable/latest.json") {
+          if ($env:NARRANT_UPDATER_ENDPOINT -ne "https://github.com/XLCYun/narrant/releases/latest/download/latest.json") {
             throw "NARRANT_UPDATER_ENDPOINT 必须是固定公开 Stable manifest。"
           }
       - uses: pnpm/action-setup@v4
@@ -289,7 +321,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
       - run: pnpm install --frozen-lockfile
       - name: 构建带 updater 签名的 current-user Windows x64 NSIS
         run: pnpm build:windows
@@ -315,16 +348,18 @@ jobs:
           if-no-files-found: error
 
   draft-release:
+    permissions:
+      contents: write
     needs: [validate, macos, windows]
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 10
     outputs:
       public_release_id: ${{ steps.reconcile.outputs.release_id }}
       previous_stable_tag: ${{ steps.previous-stable.outputs.tag }}
       previous_stable_manifest_sha256: ${{ steps.previous-stable.outputs.manifest_sha256 }}
     env:
-      GH_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}
-      TARGET_REPOSITORY: cyunlab/narrant
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: XLCYun/narrant
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       NARRANT_UPDATER_PUBLIC_KEY: ${{ vars.NARRANT_UPDATER_PUBLIC_KEY }}
@@ -343,7 +378,7 @@ jobs:
       - run: pnpm install --frozen-lockfile --prod
       - name: 在任何远端变更前固定当前 published Stable 身份
         id: previous-stable
-        if: github.ref_name != vars.NARRANT_OSS_BOOTSTRAP_TAG
+        if: github.ref_name != vars.NARRANT_FIRST_UPDATER_TAG
         run: node scripts/read-public-stable-identity.mjs
       - uses: actions/download-artifact@v4
         with:
@@ -366,8 +401,6 @@ jobs:
       source_sha: ${{ needs.validate.outputs.source_sha }}
       public_release_id: ${{ needs.draft-release.outputs.public_release_id }}
       public_tag: ${{ github.ref_name }}
-      mode: ${{ github.ref_name == vars.NARRANT_OSS_BOOTSTRAP_TAG && 'bootstrap' || 'normal' }}
+      mode: ${{ github.ref_name == vars.NARRANT_FIRST_UPDATER_TAG && 'bootstrap' || 'normal' }}
       previous_stable_tag: ${{ needs.draft-release.outputs.previous_stable_tag }}
       previous_stable_manifest_sha256: ${{ needs.draft-release.outputs.previous_stable_manifest_sha256 }}
-    secrets:
-      CYUNLAB_RELEASE_TOKEN: ${{ secrets.CYUNLAB_RELEASE_TOKEN }}

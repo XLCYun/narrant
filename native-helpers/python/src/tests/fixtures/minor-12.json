@@ -1,0 +1,10 @@
+[
+  [
+    "type Alias[T] = list[T]",
+    "type Alias[T] = list[T]"
+  ],
+  [
+    "def identity[T](x: T) -> T:",
+    "def identity[T](x: T) -> T:\n    return x"
+  ]
+]

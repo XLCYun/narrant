@@ -30,7 +30,7 @@ function artifactPaths(version = "2.3.4") {
 /** 构造协调模块的固定合法输入。 */
 function options() {
   return {
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     tag: "v2.3.4",
     version: "2.3.4",
     title: "Narrant 2.3.4",
@@ -50,9 +50,9 @@ function createGhAdapter(initialRelease, hooks = {}) {
     if (!value) return undefined;
     const release = JSON.parse(JSON.stringify(value));
     const htmlIdentity = release.draft ? "untagged-testfixture" : release.tag_name;
-    release.url ??= `https://api.github.com/repos/cyunlab/narrant/releases/${release.id}`;
-    release.upload_url ??= `https://uploads.github.com/repos/cyunlab/narrant/releases/${release.id}/assets{?name,label}`;
-    release.html_url ??= `https://github.com/cyunlab/narrant/releases/tag/${htmlIdentity}`;
+    release.url ??= `https://api.github.com/repos/XLCYun/narrant/releases/${release.id}`;
+    release.upload_url ??= `https://uploads.github.com/repos/XLCYun/narrant/releases/${release.id}/assets{?name,label}`;
+    release.html_url ??= `https://github.com/XLCYun/narrant/releases/tag/${htmlIdentity}`;
     return release;
   };
   let release = withIdentity(initialRelease);
@@ -127,8 +127,8 @@ function createGhAdapter(initialRelease, hooks = {}) {
       state: "uploaded",
       content_type: "application/octet-stream",
       size: 123,
-      url: `https://api.github.com/repos/cyunlab/narrant/releases/assets/${nextAssetId}`,
-      browser_download_url: `https://github.com/cyunlab/narrant/releases/download/${release.tag_name}/${encodeURIComponent(name)}`,
+      url: `https://api.github.com/repos/XLCYun/narrant/releases/assets/${nextAssetId}`,
+      browser_download_url: `https://github.com/XLCYun/narrant/releases/download/${release.tag_name}/${encodeURIComponent(name)}`,
     };
     release.assets.push(asset);
     hooks.afterUpload?.(release, asset, uploadOptions);
@@ -150,8 +150,8 @@ function uploadedAsset(name, tag = "v2.3.4") {
     state: "uploaded",
     content_type: "application/octet-stream",
     size: 6,
-    url: "https://api.github.com/repos/cyunlab/narrant/releases/assets/101",
-    browser_download_url: `https://github.com/cyunlab/narrant/releases/download/${tag}/${encodeURIComponent(name)}`,
+    url: "https://api.github.com/repos/XLCYun/narrant/releases/assets/101",
+    browser_download_url: `https://github.com/XLCYun/narrant/releases/download/${tag}/${encodeURIComponent(name)}`,
   };
 }
 
@@ -238,7 +238,7 @@ test("不存在时创建 Draft、上传八文件并通过 API 回读精确集合
   assert.equal(uploads.every((call) => call[1].tag === "v2.3.4"), true);
   assert.equal(
     uploads.every((call) => call[1].downloadBaseUrl ===
-      "https://github.com/cyunlab/narrant/releases/download/untagged-testfixture"),
+      "https://github.com/XLCYun/narrant/releases/download/untagged-testfixture"),
     true,
   );
   assert.equal(uploads.every((call) => call[1].token === "test-token"), true);
@@ -475,7 +475,7 @@ test("生产上传 adapter 固定 release-ID endpoint、仅以 header 携 token 
   const requestBody = new Blob([Buffer.from("binary")], { type: "application/octet-stream" });
   let observed;
   const result = await uploadReleaseAsset({
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     tag: "v2.3.4",
     releaseId: 42,
     artifact,
@@ -492,7 +492,7 @@ test("生产上传 adapter 固定 release-ID endpoint、仅以 header 携 token 
     },
   });
 
-  assert.equal(observed.url, "https://uploads.github.com/repos/cyunlab/narrant/releases/42/assets?name=Narrant%20package.dmg");
+  assert.equal(observed.url, "https://uploads.github.com/repos/XLCYun/narrant/releases/42/assets?name=Narrant%20package.dmg");
   assert.equal(observed.url.includes(token), false);
   assert.equal(observed.request.method, "POST");
   assert.equal(observed.request.redirect, "error");
@@ -509,7 +509,7 @@ test("生产上传 adapter 在 token 缺失时不会读取文件或发起请求"
       let touched = false;
       await assert.rejects(
         uploadReleaseAsset({
-          repository: "cyunlab/narrant",
+          repository: "XLCYun/narrant",
           tag: "v2.3.4",
           releaseId: 42,
           artifact: "/tmp/file.bin",
@@ -527,7 +527,7 @@ test("生产上传 adapter 在 token 缺失时不会读取文件或发起请求"
 
 test("生产上传 adapter 拒绝网络、redirect、非 2xx 与不可信响应 framing", async (context) => {
   const base = {
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     tag: "v2.3.4",
     releaseId: 42,
     artifact: "/tmp/file.bin",
@@ -613,7 +613,7 @@ test("生产上传 adapter 拒绝网络、redirect、非 2xx 与不可信响应 
 test("response metadata 早退均 best-effort cancel body 且 cleanup cause 不覆盖主错误", async (context) => {
   const token = "token-from-body-cancel";
   const base = {
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     tag: "v2.3.4",
     releaseId: 42,
     artifact: "/tmp/file.bin",
@@ -656,7 +656,7 @@ test("response metadata 早退均 best-effort cancel body 且 cleanup cause 不�
 test("response body/header/getReader cause 固定脱敏并在可用时 cancel body", async (context) => {
   const token = "token-from-response-lifecycle";
   const base = {
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     tag: "v2.3.4",
     releaseId: 42,
     artifact: "/tmp/file.bin",
@@ -721,7 +721,7 @@ test("response body/header/getReader cause 固定脱敏并在可用时 cancel bo
 test("reader read、oversize、release 异常均 cancel/release 且敏感 cleanup cause 不外泄", async (context) => {
   const token = "token-from-reader-lifecycle";
   const base = {
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     tag: "v2.3.4",
     releaseId: 42,
     artifact: "/tmp/file.bin",
@@ -773,7 +773,7 @@ test("reader read、oversize、release 异常均 cancel/release 且敏感 cleanu
 test("本地 Blob.size 必须逐字节等于 GitHub asset.size，size getter cause 不外泄", async () => {
   const token = "token-from-blob-size";
   const base = {
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     tag: "v2.3.4",
     releaseId: 42,
     artifact: "/tmp/file.bin",
@@ -813,7 +813,7 @@ test("本地 Blob.size 必须逐字节等于 GitHub asset.size，size getter cau
 
 test("生产上传 adapter 对每个 asset response identity 与 exact API URL fail closed", async (context) => {
   const base = {
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     tag: "v2.3.4",
     releaseId: 42,
     artifact: "/tmp/file.bin",
@@ -827,10 +827,10 @@ test("生产上传 adapter 对每个 asset response identity 与 exact API URL f
     (asset) => { asset.content_type = "text/plain"; },
     (asset) => { asset.size = 0; },
     (asset) => { asset.size = 999; },
-    (asset) => { asset.url = "https://api.github.com:443/repos/cyunlab/narrant/releases/assets/101"; },
+    (asset) => { asset.url = "https://api.github.com:443/repos/XLCYun/narrant/releases/assets/101"; },
     (asset) => { asset.url += "?private=1"; },
     (asset) => { asset.url += "#fragment"; },
-    (asset) => { asset.url = "https://user@api.github.com/repos/cyunlab/narrant/releases/assets/101"; },
+    (asset) => { asset.url = "https://user@api.github.com/repos/XLCYun/narrant/releases/assets/101"; },
     (asset) => { asset.url = "https://api.github.com/repos/other/repo/releases/assets/101"; },
     (asset) => { asset.browser_download_url = "https://github.com/other/repo/file"; },
   ];
@@ -853,7 +853,7 @@ test("gh runner 等到 close 才返回 exit 后追加的完整 stdout/stderr", a
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  const resultPromise = runGhCommand(["api", "repos/cyunlab/narrant/releases/42"], {
+  const resultPromise = runGhCommand(["api", "repos/XLCYun/narrant/releases/42"], {
     spawnProcess: () => child,
   });
   let settled = false;

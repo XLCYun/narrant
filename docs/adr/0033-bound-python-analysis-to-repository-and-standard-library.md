@@ -15,4 +15,9 @@ this decision neither permits failed analysis to become a successful empty graph
 changes the shared workspace and in-memory configuration rules of
 [ADR-0031](0031-reuse-review-head-for-structure-analysis.md).
 
+Implementation update (2026-10-11): [ADR-0035](0035-migrate-existing-analyzers-to-native-apis.md)
+keeps this source boundary with a native Ruff/ty helper and an immutable in-memory System;
+fixed typeshed is embedded in that helper. The previous ty server route is retired.
+This change does not claim final Windows/CI acceptance or expand the input scope.
+
 See the confirmed scope in the [Python specification](../specs/0023-python-language-analyzer.md).

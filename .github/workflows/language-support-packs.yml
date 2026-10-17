@@ -1,51 +1,29 @@
 name: Language support packs
 
 on:
-  pull_request:
-    paths:
-      - resources/language-support-packs.json
-      - resources/native-toolchains.json
-      - scripts/provision-native-toolchains.mjs
-      - scripts/select-msvc-redist.mjs
-      - scripts/tests/select-msvc-redist.test.mjs
-      - scripts/native-xz-extraction.mjs
-      - scripts/tests/native-xz-extraction.test.mjs
-      - scripts/verify-native-analyzers.mjs
-      - scripts/tests/native-analyzer-ci.test.mjs
-      - scripts/run-windows-process-probe.mjs
-      - scripts/tests/run-windows-process-probe.test.mjs
-      - scripts/run-windows-lifecycle-tests.mjs
-      - scripts/tests/run-windows-lifecycle-tests.test.mjs
-      - src-tauri/tests/native_helper_graphs.rs
-      - scripts/*language-support-packs.mjs
-      - scripts/tests/language-support-packs.test.mjs
-      - scripts/python-language-support-smoke.mjs
-      - scripts/verify-python-analyzer.mjs
-      - native-helpers/**
-      - scripts/native-language-support-packs.mjs
-      - scripts/tests/native-language-support-packs.test.mjs
-      - src-tauri/src/structure_review/code_graph/**
-      - src-tauri/src/structure_review/native_analyzer/**
-      - src-tauri/src/structure_review/native_languages/**
-      - src-tauri/src/structure_review/python_analyzer/**
-      - src-tauri/src/structure_review/application/**
-      - src-tauri/src/language_support/**
-      - src-tauri/src/lsp/**
-      - src-tauri/src/child_process.rs
-      - src-tauri/src/child_process/**
-      - src-tauri/Cargo.toml
-      - src-tauri/Cargo.lock
-      - src-tauri/build.rs
-      - .github/workflows/language-support-packs.yml
   workflow_dispatch:
     inputs:
       validation_scope:
-        description: Full acceptance or focused Windows lifecycle diagnostics
+        description: Full acceptance, native analyzers, or Windows lifecycle
         type: choice
-        options: [full, windows-lifecycle]
+        options: [full, native-analyzers, windows-lifecycle]
         default: full
+      language:
+        description: Completed Native helper to validate (all keeps the full language gate)
+        type: choice
+        options: [all, typescript-javascript, rust, python, java, go, csharp, c-cpp]
+        default: all
+      platform:
+        description: Platforms to validate (publishing requires all)
+        type: choice
+        options: [all, macos, windows]
+        default: all
+      upload_artifacts:
+        description: Upload build artifacts (always enabled when publishing)
+        type: boolean
+        default: true
       publish:
-        description: Publish validated packs to the immutable OSS prefix
+        description: Publish validated packs as GitHub Releases (never application Latest)
         type: boolean
         default: false
 
@@ -53,167 +31,25 @@ permissions:
   contents: read
 
 jobs:
-  windows-lifecycle:
-    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'
-    runs-on: windows-2022
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.18.0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native-helpers/windows-process-probe
-          key: windows-lifecycle
-          cache-on-failure: true
-      - name: Validate lifecycle runner
-        run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs
-      - name: Run process and LSP lifecycle checks from production sources
-        run: node scripts/run-windows-lifecycle-tests.mjs
-
-  build:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation_scope != 'windows-lifecycle'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-        with:
-          version: 11.13.1
-          run_install: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.18.0
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: node --test scripts/tests/language-support-packs.test.mjs scripts/tests/native-language-support-packs.test.mjs
-      - name: Build and execute native tools
-        run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          key: python-native-${{ matrix.target }}
-          cache-on-failure: true
-      - name: Verify native Python graphs, installation, and Review lifecycle
-        run: node scripts/verify-python-analyzer.mjs language-support-packs
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: language-support-packs-${{ matrix.target }}
-          path: language-support-packs/
-          if-no-files-found: error
-
-  native-analyzers:
-    if: github.event_name != 'workflow_dispatch' || inputs.validation_scope != 'windows-lifecycle'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: windows-2022
-            target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-        with:
-          version: 11.13.1
-          run_install: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.18.0
-          cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Probe Windows process cleanup before toolchain provisioning
-        if: runner.os == 'Windows'
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $ErrorActionPreference = 'Stop'
-          node scripts/run-windows-process-probe.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'Windows process cleanup probe failed; see job membership and process handle evidence above' }
-      - run: pnpm install --frozen-lockfile
-      - name: Test native validation and pack scripts
-        run: node --test scripts/tests/native-analyzer-ci.test.mjs scripts/tests/run-windows-process-probe.test.mjs scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs scripts/tests/select-msvc-redist.test.mjs
-      - name: Provision checksum-verified private developer toolchains
-        run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains"
-      - name: Select exact macOS target declarations
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdk=/Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk
-          test -d "$sdk"
-          echo "NARRANT_MACOS_SDK=$sdk" >> "$GITHUB_ENV"
-          echo 'NARRANT_MACOS_SDK_VERSION=15.5' >> "$GITHUB_ENV"
-          echo 'DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer' >> "$GITHUB_ENV"
-      - name: Select isolated Windows SDK and MSVC declaration roots
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vs = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
-          $fixed = (Get-Content resources/native-toolchains.json -Raw | ConvertFrom-Json).runner_prerequisites.'x86_64-pc-windows-msvc'
-          $version = $fixed.msvc_tools
-          $msvc = "$vs\VC\Tools\MSVC\$version"
-          $sdk = 'C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0'
-          foreach ($directory in @("$msvc\include", "$sdk\ucrt", "$sdk\um", "$sdk\shared")) {
-            if (!(Test-Path $directory -PathType Container)) { throw "Missing exact SDK directory: $directory" }
-          }
-          node scripts/select-msvc-redist.mjs "$vs" "$($fixed.msvc_runtime_version)"
-          if ($LASTEXITCODE -ne 0) { throw 'Fixed MSVC runtime selection failed; see metadata and DLL version evidence above' }
-          "NARRANT_MSVC_ROOT=$msvc" >> $env:GITHUB_ENV
-          "NARRANT_MSVC_VERSION=$version" >> $env:GITHUB_ENV
-          "NARRANT_WINDOWS_SDK=$sdk" >> $env:GITHUB_ENV
-          "NARRANT_WINDOWS_SDK_VERSION=10.0.26100.0" >> $env:GITHUB_ENV
-          "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          key: all-native-${{ matrix.target }}
-          cache-on-failure: true
-      - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance
-        run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
-        with:
-          name: native-analyzers-${{ matrix.target }}
-          path: |
-            native-language-support-packs/*/*/*/manifest.json
-            native-language-support-packs/*/*/*/pack.tar.gz
-            native-language-support-packs/native-helpers-config.json
-          if-no-files-found: warn
+  validate:
+    uses: ./.github/workflows/validate-language-support-packs.yml
+    with:
+      validation_scope: ${{ inputs.validation_scope }}
+      language: ${{ inputs.language }}
+      platform: ${{ inputs.platform }}
+      upload_artifacts: ${{ inputs.upload_artifacts || inputs.publish }}
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'full' && inputs.publish && github.ref == 'refs/heads/main'
-    needs: [build, native-analyzers]
-    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'full' && inputs.language == 'all' && inputs.platform == 'all' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: macos-15
     timeout-minutes: 20
     environment: language-support-packs
     concurrency:
       group: language-support-packs-publish
       cancel-in-progress: false
     permissions:
-      contents: read
-      id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -234,30 +70,7 @@ jobs:
           path: language-support-packs
       - name: Validate complete artifacts before obtaining credentials
         run: node --input-type=module -e "import { readArtifacts } from './scripts/publish-language-support-packs.mjs'; await readArtifacts('language-support-packs')"
-      - name: Install checksum-verified ossutil
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail --location --silent --show-error -o "$RUNNER_TEMP/ossutil.zip" https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip
-          printf '%s  %s\n' dcc512e4a893e16bbee63bc769339d8e56b21744fd83c8212a9d8baf28767343 "$RUNNER_TEMP/ossutil.zip" | sha256sum --check
-          unzip -q "$RUNNER_TEMP/ossutil.zip" -d "$RUNNER_TEMP/ossutil-extracted"
-          mkdir -p "$RUNNER_TEMP/bin"
-          install -m 0755 "$RUNNER_TEMP/ossutil-extracted/ossutil-v1.7.19-linux-amd64/ossutil" "$RUNNER_TEMP/bin/ossutil"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Exchange isolated OSS publishing identity
-        id: oss
-        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1.1.0
-        with:
-          oidc-provider-arn: ${{ vars.ALIBABA_CLOUD_OIDC_PROVIDER_ARN }}
-          role-to-assume: ${{ vars.ALIBABA_CLOUD_ROLE_ARN }}
-          role-session-name: narrant-packs-${{ github.run_id }}
-          role-session-expiration: 1800
-          audience: sts.aliyuncs.com
       - name: Publish immutable artifacts and verify public downloads
         env:
-          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ steps.oss.outputs.aliyun-access-key-id }}
-          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ steps.oss.outputs.aliyun-access-key-secret }}
-          ALIBABA_CLOUD_SECURITY_TOKEN: ${{ steps.oss.outputs.aliyun-security-token }}
-          OSS_BUCKET: ${{ vars.OSS_BUCKET }}
-          OSS_REGION: ${{ vars.OSS_REGION }}
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/publish-language-support-packs.mjs language-support-packs

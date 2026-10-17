@@ -10,7 +10,6 @@
   "scripts": {
     "build:language-packs": "node scripts/build-language-support-packs.mjs",
     "publish:language-packs": "node scripts/publish-language-support-packs.mjs",
-    "setup:typescript-analyzer": "node scripts/setup-typescript-analyzer.mjs",
     "generate:file-icons": "node scripts/generate-file-type-icons.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",
     "predev": "pnpm generate:file-icons",
@@ -25,7 +24,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:components": "vitest run",
-    "test:e2e": "cross-env VITE_WDIO=true pnpm tauri build --debug --no-bundle --features wdio --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts",
+    "test:e2e": "cross-env VITE_WDIO=true pnpm tauri build --debug --no-bundle --features wdio --config src-tauri/tauri.e2e.conf.json && cross-env NODE_USE_ENV_PROXY=0 wdio run wdio.conf.ts",
     "test:e2e:custom-live": "node scripts/run-live-custom-provider-e2e.mjs",
     "tauri": "node scripts/run-tauri.mjs",
     "clean:tauri": "scripts/cargo-agent.sh clean --manifest-path src-tauri/Cargo.toml",
@@ -57,12 +56,10 @@
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.12.2",
     "remark-gfm": "^4.0.1",
-    "remark-parse": "^11.0.0",
     "shadcn": "^4.13.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
-    "tw-animate-css": "^1.4.0",
-    "unified": "^11.0.5"
+    "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -95,5 +92,6 @@
     "vite": "^6.0.0",
     "vitest": "^4.1.10",
     "webdriverio": "9.27.1"
-  }
+  },
+  "license": "Apache-2.0"
 }

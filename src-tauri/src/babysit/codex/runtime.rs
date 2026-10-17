@@ -5,7 +5,7 @@
 
 use super::discovery::CodexExecutableDiscovery;
 use super::CodexAppServerProvider;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use crate::application_settings::BabysitProvider;
 use crate::application_settings::{ApplicationSettingsApplication, BabysitModelPreference};
 use crate::babysit::{
@@ -46,7 +46,7 @@ impl ApplicationCodexSettings {
     }
 
     /// 通过统一 Application Settings 边界保存 executable 偏好。
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     async fn save(&self, executable: Option<PathBuf>) -> Result<Option<PathBuf>, BabysitError> {
         let mut preference = self
             .application
@@ -81,7 +81,7 @@ impl CodexRuntime {
     }
 
     /// 每次新分析读取权威模型偏好，并用新鲜目录解析实际模型与思考强度。
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn prepare_analysis(
         &self,
         workspace_path: &Path,
@@ -207,7 +207,7 @@ impl CodexRuntime {
     }
 
     /// 通过生产设置边界验证并保存显式可执行文件偏好。
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn select_executable(&self, path: &Path) -> Result<(), BabysitError> {
         let selected = self.validate_executable(path).await?;
         let resolved =

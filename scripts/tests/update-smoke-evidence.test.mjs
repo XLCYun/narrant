@@ -22,7 +22,7 @@ const sourceSha = "b".repeat(40);
 function receipt() {
   return {
     schemaVersion: 1,
-    repository: "cyunlab/narrant",
+    repository: "XLCYun/narrant",
     releaseId: 42,
     tag: "v2.0.0",
     version: "2.0.0",
@@ -48,7 +48,7 @@ function evidence(target, mode = "normal") {
     target,
     runner: mac
       ? { os: "macos", arch: "aarch64", image: "macos-15" }
-      : { os: "windows", arch: "x86_64", image: "windows-2025" },
+      : { os: "windows", arch: "x86_64", image: "windows-2022" },
     platform: mac
       ? { packageKind: "app-tar-gz", installerKind: "dmg", installScope: "user", codeSigning: "verified", notarization: "verified" }
       : { packageKind: "nsis-exe", installerKind: "nsis-exe", installScope: "current-user", registryRoot: "HKCU", msiPresent: false, authenticode: "not-required" },
@@ -61,7 +61,7 @@ function evidence(target, mode = "normal") {
       packageSha256: mac ? "d".repeat(64) : "e".repeat(64),
       signatureSha256: mac ? "f".repeat(64) : "1".repeat(64),
       previousReleaseSigningKeySha256: "2".repeat(64),
-      packageUrl: `https://github.com/cyunlab/narrant/releases/download/v1.9.0/previous-${mac ? "mac" : "windows"}`,
+      packageUrl: `https://github.com/XLCYun/narrant/releases/download/v1.9.0/previous-${mac ? "mac" : "windows"}`,
     },
     startedAt: "2026-09-02T07:00:00.000Z",
     completedAt: "2026-09-02T07:10:00.000Z",

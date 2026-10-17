@@ -1,3 +1,4 @@
+import { migratedNativePacks } from './native-migration.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -5,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const nativeIds = ['java', 'go', 'csharp', 'c-cpp'];
+const nativeIds = Object.keys(migratedNativePacks);
 
 /** 只复制自己构建的工具和批准的 SDK 声明，展开 SDK 内部链接，拒绝外向链接。 */
 export async function copyToolTree(source, destination) {
@@ -125,14 +126,70 @@ export async function smokeNativeHelper({ executable, args = [], id, projection,
         else resolve();
       });
     });
-  } catch (error) { primaryError = error; throw error; }
-  finally {
-    try { await fs.rm(root, { recursive: true, force: true }); }
-    catch (error) {
-      if (!primaryError) throw error;
-      primaryError.message += `; scratch cleanup failed: ${error.message}`;
+  } catch (error) { primaryError = error; }
+  try { await fs.rm(root, { recursive: true, force: true }); }
+  catch (error) {
+    if (primaryError) primaryError.message += `; scratch cleanup failed: ${error.message}`;
+    else primaryError = error;
+  }
+  if (primaryError) throw primaryError;
+}
+
+/** 从实际目标的锁定依赖闭包收集许可；Rust 正常构建入口使用，后续 Python 可复用此归档步骤。 */
+export async function packageCargoLicenses(source, target, payload, label) {
+  // 构建自己的工具时允许获取锁定 metadata 所需的开发 crate；release 缓存不保证含它们。
+  // 分发仍只收集下面的目标生产闭包，此步骤不参与用户项目的离线分析。
+  const metadata = JSON.parse(execFileSync('bash', [path.join(repository, 'scripts/cargo-agent.sh'), 'metadata', '--locked', '--filter-platform', target, '--format-version', '1'], { cwd: source, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
+  const nodes = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
+  const included = new Set();
+  const pending = [metadata.resolve.root];
+  while (pending.length) {
+    const id = pending.pop();
+    if (included.has(id)) continue;
+    included.add(id);
+    for (const dependency of nodes.get(id).deps) {
+      if (dependency.dep_kinds.some(kind => kind.kind !== 'dev')) pending.push(dependency.pkg);
     }
   }
+  const fallbackRoot = path.join(source, 'licenses');
+  let fallbacks = {};
+  try { fallbacks = JSON.parse(await fs.readFile(path.join(fallbackRoot, 'fallbacks.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const notices = [];
+  for (const pkg of metadata.packages.filter(pkg => included.has(pkg.id))) {
+    const destination = path.join(payload, 'licenses', `${pkg.name}-${pkg.version}`);
+    await fs.mkdir(destination, { recursive: true });
+    const files = new Set();
+    let directory = path.dirname(pkg.manifest_path);
+    for (let level = 0; level < 5; level++) {
+      const names = await fs.readdir(directory);
+      for (const name of names.filter(name => /^(LICENSE|COPYING|NOTICE)([.-]|$)/i.test(name))) {
+        if ((await fs.stat(path.join(directory, name))).isFile()) {
+          await fs.copyFile(path.join(directory, name), path.join(destination, name));
+          files.add(name);
+        }
+      }
+      if (files.size || path.dirname(directory) === directory) break;
+      directory = path.dirname(directory);
+    }
+    if (pkg.license_file) {
+      const name = path.basename(pkg.license_file);
+      await fs.copyFile(path.resolve(path.dirname(pkg.manifest_path), pkg.license_file), path.join(destination, name));
+      files.add(name);
+    }
+    if (!files.size && pkg.license) {
+      // 缺文本的精确锁定版本只能使用已保存一手出处的原许可，不猜测作者或许可模板。
+      const names = fallbacks[`${pkg.name}@${pkg.version}`];
+      if (!Array.isArray(names) || !names.length) throw new Error(`Locked crate has no distributable license text: ${pkg.name}`);
+      for (const name of names) {
+        await fs.copyFile(path.join(fallbackRoot, name), path.join(destination, name));
+        files.add(name);
+      }
+    }
+    notices.push({ name: pkg.name, version: pkg.version, license: pkg.license, source: pkg.source, repository: pkg.repository, authors: pkg.authors, files: [...files].sort() });
+  }
+  if (Object.keys(fallbacks).length) await fs.copyFile(path.join(fallbackRoot, 'sources.json'), path.join(payload, `licenses/${label}-license-sources.json`));
+  await fs.writeFile(path.join(payload, `licenses/${label}-dependencies.json`), JSON.stringify(notices, null, 2));
 }
 
 /** 从固定语言源码和私有 SDK 组装本机开发包；不下载项目依赖、不调用项目构建。 */
@@ -151,7 +208,17 @@ export async function buildNativePack({ id, target, output, definition, packageD
   let executable, args = [];
   try {
     for (const part of ['bin', 'runtime', 'licenses', 'control']) await fs.mkdir(path.join(payload, part), { recursive: true });
-    if (id === 'go') {
+    if (id === 'rust' || id === 'python') {
+      const { buildMigratingNativeHelper } = await import('./build-migrating-native-helper.mjs');
+      await buildMigratingNativeHelper(id, payload);
+      executable = path.join(payload, `bin/narrant-${id}${suffix}`);
+      await packageCargoLicenses(path.join(repository, `native-helpers/${id}`), target, payload, id === 'rust' ? 'Rust' : 'Python');
+      if (id === 'python') {
+        const source = path.join(repository, 'native-helpers/python/licenses');
+        for (const name of ['ruff-LICENSE', 'typeshed-LICENSE']) await fs.copyFile(path.join(source, name), path.join(payload, 'licenses', name));
+        platforms.push({ id: 'python-stdlib', kind: 'python-embedded-stdlib', version: definition.ty, root: 'bin', metadata: { source_revision: definition.sourceCommit } });
+      }
+    } else if (id === 'go') {
       const sdk = await findDirectory([process.env.NARRANT_GO_SDK, windows ? 'C:\\Program Files\\Go' : '/usr/local/go'], `Go ${definition.go} helper build SDK`);
       if (!(await fs.readFile(path.join(sdk, 'VERSION'), 'utf8')).startsWith(`go${definition.go}\n`)) throw new Error('Go SDK version mismatch');
       executable = path.join(payload, `bin/narrant-go${suffix}`);
@@ -194,8 +261,10 @@ export async function buildNativePack({ id, target, output, definition, packageD
         for (const name of ['NARRANT_MSVC_VERSION', 'NARRANT_VISUAL_STUDIO', 'NARRANT_MSVC_REDIST']) if (!process.env[name]) throw new Error(`Missing fixed Windows toolchain input: ${name}`);
         const source = path.join(repository, 'native-helpers/clang');
         const build = path.join(source, 'build');
-        execFileSync('cmake', ['-S', source, '-B', build, '-G', 'Visual Studio 17 2022', '-A', 'x64', '-T', `v143,version=${process.env.NARRANT_MSVC_VERSION}`, '-DCMAKE_SYSTEM_VERSION=10.0.26100.0', `-DCMAKE_GENERATOR_INSTANCE=${process.env.NARRANT_VISUAL_STUDIO}`, `-DLLVM_DIR=${path.join(sdk, 'lib/cmake/llvm')}`, `-DClang_DIR=${path.join(sdk, 'lib/cmake/clang')}`], { stdio: 'inherit' });
-        execFileSync('cmake', ['--build', build, '--config', 'Release', '--parallel', '2'], { stdio: 'inherit' });
+        const cmake = process.env.NARRANT_CMAKE || 'cmake';
+        execFileSync(cmake, ['-S', source, '-B', build, '-G', 'Visual Studio 17 2022', '-A', 'x64', '-T', `v143,version=${process.env.NARRANT_MSVC_VERSION}`, '-DCMAKE_SYSTEM_VERSION=10.0.26100.0', `-DCMAKE_GENERATOR_INSTANCE=${process.env.NARRANT_VISUAL_STUDIO}`, `-DLLVM_DIR=${path.join(sdk, 'lib/cmake/llvm')}`, `-DClang_DIR=${path.join(sdk, 'lib/cmake/clang')}`], { stdio: 'inherit' });
+        // 构建机器可按可用内存设置 CMake 并行度，默认仍为两个编译任务。
+        execFileSync(cmake, ['--build', build, '--config', 'Release', '--parallel', process.env.CMAKE_BUILD_PARALLEL_LEVEL || '2'], { stdio: 'inherit' });
         // 运行时只从私有 bin 加载官方 LLVM DLL 与已批准的 VC143 CRT。
         for (const directory of [path.join(sdk, 'bin'), process.env.NARRANT_MSVC_REDIST]) {
           for (const name of await fs.readdir(directory)) if (name.toLowerCase().endsWith('.dll')) await copyToolTree(path.join(directory, name), path.join(payload, 'bin', name));
@@ -246,7 +315,7 @@ export async function buildNativePack({ id, target, output, definition, packageD
         sdkPlatforms.push({ id: `macos-${version}`, kind: 'clang-target', version, root: sdkRoot, metadata: { target_triple: `arm64-apple-macosx${deploymentTarget}`, system_include_directories: ['usr/include/c++/v1', 'usr/include'], resource_platform_id: 'clang-resource-21' } });
       }
     }
-    config[helper] = { executable: relocate(executable), args: args.map(relocate), environment: id === 'csharp' ? { DOTNET_ROOT: path.join(extracted, 'bin'), DOTNET_MULTILEVEL_LOOKUP: '0', DOTNET_EnableDiagnostics: '0' } : {}, trusted_roots: [extracted], platforms: sdkPlatforms };
+    config[helper] = { executable: relocate(executable), args: args.map(relocate), environment: id === 'csharp' ? { DOTNET_ROOT: path.join(extracted, 'bin'), DOTNET_MULTILEVEL_LOOKUP: '0', DOTNET_EnableDiagnostics: '0' } : {}, trusted_roots: [id === 'python' ? path.join(extracted, 'bin') : extracted], platforms: sdkPlatforms };
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     console.log(`Built and smoke-tested local ${id}@${definition.version}: ${destination}`);
     return destination;
