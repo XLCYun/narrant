@@ -369,6 +369,34 @@ describe("App", () => {
     expect(screen.getByText(/fork-owner\/fork-repo/)).toHaveTextContent(/GitHub 访问次数已用尽/);
   });
 
+  it("首次进入另一个 Repository 概览时重新默认 Open，切换筛选不调用 Tauri", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entries = ["one", "two"].map((name, index) => ({
+      id: index + 1, canonicalPath: `/work/${name}`, gitCommonDirectory: `/work/${name}/.git`,
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
+    }));
+    invoke.mockImplementation((command: string, args?: { repositoryId?: number }) => {
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: entries, recentReviews: [] });
+      if (command === "open_repository_overview") return Promise.resolve({
+        kind: "ready", overview: { repository: entries.find((entry) => entry.id === args?.repositoryId), reviews: [] },
+      });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "/work/one" }));
+    expect(await screen.findByRole("tab", { name: "Open", selected: true })).toBeVisible();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryId: 1 }));
+    const callsBefore = invoke.mock.calls.length;
+    fireEvent.click(screen.getByRole("tab", { name: "All", exact: true }));
+    expect(screen.getByRole("tab", { name: "All", selected: true })).toBeVisible();
+    expect(invoke.mock.calls).toHaveLength(callsBefore);
+
+    fireEvent.click(screen.getByRole("button", { name: "打开仓库 two" }));
+    await screen.findByRole("heading", { name: "two" });
+    expect(screen.getByRole("tab", { name: "Open", selected: true })).toBeVisible();
+  });
+
   it("选择发现的 Pull Request 会通过 durable reviewId 打开本地 Review", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};

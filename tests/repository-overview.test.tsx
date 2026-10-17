@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { RepositoryOverview, type PullRequestGroup } from "@/components/repository-overview";
 import { i18n } from "@/lib/i18n";
 import type { RepositoryReviewSummary } from "@/lib/review-types";
@@ -46,6 +47,7 @@ const historyReview: RepositoryReviewSummary = {
 beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(cleanup);
 
+/** 用稳定的操作回调渲染概览，并允许模拟 discovery 更新而不重新挂载组件。 */
 function renderOverview(options: {
   reviews?: RepositoryReviewSummary[];
   groups?: PullRequestGroup[];
@@ -59,7 +61,7 @@ function renderOverview(options: {
   const onRetryDiscovery = vi.fn();
   const onConnectGitHub = vi.fn();
   const onOpenReview = vi.fn();
-  render(<RepositoryOverview
+  const overview = <RepositoryOverview
     repositoryName="narrant"
     repositoryPath="/work/narrant"
     pullRequestGroups={options.groups ?? []}
@@ -74,8 +76,32 @@ function renderOverview(options: {
     onOpenReview={onOpenReview}
     onOpenPullRequest={onOpenPullRequest}
     localBranches={<p>Local branch content</p>}
-  />);
-  return { onOpenReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub };
+  />;
+  const view = render(overview);
+  return {
+    onOpenReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub,
+    rerender: (props: Partial<ComponentProps<typeof RepositoryOverview>>) => view.rerender(<RepositoryOverview {...overview.props} {...props} />),
+  };
+}
+
+/** 通过可见的状态标签切换筛选，覆盖与用户相同的交互入口。 */
+async function selectState(name: "Open" | "Closed" | "Merged" | "All", label = "Pull Request 状态") {
+  const filters = screen.getByRole("tablist", { name: label });
+  fireEvent.click(within(filters).getByRole("tab", { name, exact: true }));
+}
+
+/** 为离线筛选构造独立 Review，保留与在线条目相同的生命周期状态。 */
+function savedPullRequest(value: typeof pullRequest): RepositoryReviewSummary {
+  if (saved.selection.kind !== "pull-request") throw new Error("Expected Pull Request Selection");
+  return {
+    ...saved,
+    reviewId: `review-${value.number}`,
+    selection: { ...saved.selection, pullRequest: {
+      ...saved.selection.pullRequest,
+      ...value,
+      state: value.state as "open" | "closed" | "merged",
+    } },
+  };
 }
 
 describe("RepositoryOverview", () => {
@@ -84,6 +110,89 @@ describe("RepositoryOverview", () => {
     expect(screen.getByRole("tab", { name: "Pull Requests" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "本地分支" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "审核历史" })).toBeInTheDocument();
+    const filters = screen.getByRole("tablist", { name: "Pull Request 状态" });
+    expect(within(filters).getAllByRole("tab")).toHaveLength(4);
+    expect(within(filters).getByRole("tab", { selected: true })).toHaveTextContent("Open");
+  });
+
+  it.each(["online", "saved"])("%s 条目统一按四种状态筛选，Draft 仅在未关闭时归入 Open", async (source) => {
+    const values = [
+      pullRequest,
+      { ...pullRequest, number: 41, title: "Draft change", isDraft: true },
+      { ...pullRequest, number: 42, title: "Closed change", state: "closed", isDraft: true },
+      { ...pullRequest, number: 43, title: "Merged change", state: "merged" },
+    ];
+    const reviews = source === "saved" ? values.map(savedPullRequest) : [];
+    const groups = source === "online" ? [{ repository, remoteNames: ["origin"], pullRequests: values, error: null }] : [];
+    const before = JSON.stringify({ reviews, groups });
+    const actions = renderOverview({ reviews, groups, connected: source === "online" });
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByText("#41 Draft change")).toBeVisible();
+    expect(screen.queryByText("#42 Closed change")).not.toBeInTheDocument();
+
+    await selectState("Closed");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("#42 Closed change")).toBeVisible();
+    await selectState("Merged");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("#43 Merged change")).toBeVisible();
+    await selectState("All");
+    expect(screen.getAllByRole("listitem")).toHaveLength(4);
+    await selectState("Open");
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(JSON.stringify({ reviews, groups })).toBe(before);
+    expect(actions.onOpenReview).not.toHaveBeenCalled();
+    expect(actions.onOpenPullRequest).not.toHaveBeenCalled();
+    expect(actions.onRetryDiscovery).not.toHaveBeenCalled();
+    expect(actions.onConnectGitHub).not.toHaveBeenCalled();
+  });
+
+  it("在线最新状态覆盖已保存状态，继续审核仍复用原 Review", async () => {
+    const { onOpenReview } = renderOverview({
+      reviews: [saved],
+      groups: [{ repository, remoteNames: ["origin"], pullRequests: [{ ...pullRequest, state: "merged" }], error: null }],
+    });
+    expect(screen.getByText("没有 Open 状态的 Pull Request")).toBeVisible();
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
+    await selectState("Closed");
+    expect(screen.getByText("没有 Closed 状态的 Pull Request")).toBeVisible();
+    await selectState("Merged");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("#40 Repository overview")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /继续审核/ }));
+    expect(onOpenReview).toHaveBeenCalledWith(saved);
+    expect(saved.selection.kind === "pull-request" && saved.selection.pullRequest.state).toBe("open");
+  });
+
+  it("筛选空结果保留离线提示和状态入口，切换 All 后可继续已有 Review", async () => {
+    const closed = savedPullRequest({ ...pullRequest, state: "closed" });
+    renderOverview({ reviews: [closed], connected: false, discoveryError: "offline" });
+    expect(screen.getByText("没有 Open 状态的 Pull Request")).toBeVisible();
+    expect(screen.getByText("可以切换状态查看其他 Pull Request。")).toBeVisible();
+    expect(screen.getByText(/在线元数据可能不是最新/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "连接 GitHub" })).not.toBeInTheDocument();
+    await selectState("All");
+    expect(screen.getByRole("button", { name: /继续审核/ })).toBeVisible();
+  });
+
+  it("筛选后无结果仍显示局部失败，刷新期间与成功后保留选择", async () => {
+    const group = { repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null };
+    const failedGroup = { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" };
+    const { rerender, onRetryDiscovery } = renderOverview({ reviews: [saved], groups: [group, failedGroup] });
+    await selectState("Merged");
+    expect(screen.getByText("没有 Merged 状态的 Pull Request")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "重新尝试" }));
+    expect(onRetryDiscovery).toHaveBeenCalledOnce();
+    rerender({ pullRequestGroups: [group, failedGroup], discoveryLoading: true });
+    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
+    rerender({ pullRequestGroups: [group], discoveryError: "offline" });
+    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
+    rerender({ pullRequestGroups: [{ ...group, pullRequests: [{ ...pullRequest, state: "merged" }] }] });
+    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
+    expect(screen.getByRole("button", { name: /继续审核/ })).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "本地分支" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Pull Requests" }));
+    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
   });
 
   it("从审核历史整行继续 Review", () => {
@@ -251,5 +360,13 @@ describe("RepositoryOverview", () => {
     expect(screen.getByRole("tab", { name: "Review history" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
     expect(screen.getByLabelText("Repository tasks")).toBeVisible();
+  });
+
+  it("英文 locale 翻译筛选入口与空结果说明", async () => {
+    await i18n.changeLanguage("en");
+    renderOverview({ reviews: [saved] });
+    await selectState("Closed", "Pull Request status");
+    expect(screen.getByText("No Closed Pull Requests")).toBeVisible();
+    expect(screen.getByText("Choose another status to see other Pull Requests.")).toBeVisible();
   });
 });

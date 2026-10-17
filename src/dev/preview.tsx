@@ -33,6 +33,7 @@ import { ApplicationUpdateAttention } from "@/components/application-update/appl
 import { ApplicationUpdateSurface } from "@/components/application-update/application-update-surface";
 import type { SettingsSection } from "@/settings/settings-section";
 import { resolvePreviewScenarioKey } from "@/dev/preview-routing";
+import { PullRequestsPreview } from "@/dev/pull-requests-preview";
 
 /** 描述一个可以直接在浏览器中验收的组件场景。 */
 type PreviewScenario = {
@@ -805,6 +806,16 @@ const previews: Record<string, PreviewDefinition> = {
         label: "正在打开 Review",
         render: () => <ReviewHistoryPreview initiallyOpening />,
       },
+    },
+  },
+  "pull-requests": {
+    label: "Pull Requests 状态筛选",
+    scenarios: {
+      default: { label: "四种状态与长短标题", render: () => <PullRequestsPreview /> },
+      "closed-only": { label: "Open 筛选空结果", render: () => <PullRequestsPreview mode="closed-only" /> },
+      offline: { label: "离线已保存 Review", render: () => <PullRequestsPreview mode="offline" /> },
+      retry: { label: "重试后更新在线状态", render: () => <PullRequestsPreview mode="retry" /> },
+      loading: { label: "后台刷新保留筛选", render: () => <PullRequestsPreview mode="loading" /> },
     },
   },
   "review-reader": {
