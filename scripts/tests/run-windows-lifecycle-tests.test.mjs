@@ -7,8 +7,8 @@ import { runInNewContext } from 'node:vm';
 import { runWindowsLifecycleTests } from '../run-windows-lifecycle-tests.mjs';
 
 /** 统一 Git checkout 的 LF/CRLF 差异，让工作流断言只验证调度行为。 */
-async function readLanguageWorkflow() {
-  return (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+async function readLanguageWorkflow(file = 'validate-language-support-packs.yml') {
+  return (await fs.readFile(new URL(`../../.github/workflows/${file}`, import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
 }
 
 // 非 Windows 主机不能因为 cfg 排除了全部测试而得到成功结论。
@@ -55,14 +55,15 @@ process.exit(7);
 // 轻量诊断独占 Windows；聚焦语言只运行 native 验收，发布必须等待完整双平台且显式授权。
 test('manual lifecycle scope isolates one cheap job and cannot publish packs', async () => {
   const workflow = await readLanguageWorkflow();
-  const job = name => workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
+  const publishing = await readLanguageWorkflow('language-support-packs.yml');
+  const job = name => (name === 'publish' ? publishing : workflow).split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
   assert.match(workflow, /validation_scope:\n[\s\S]*default: full/);
   const lifecycle = job('windows-lifecycle');
-  assert.match(lifecycle, /if: github.event_name == 'workflow_dispatch' && inputs.validation_scope == 'windows-lifecycle'/);
+  assert.match(lifecycle, /if: inputs.validation_scope == 'windows-lifecycle'/);
   assert.match(lifecycle, /runs-on: windows-2022/);
   assert.match(lifecycle, /run: node scripts\/run-windows-lifecycle-tests.mjs/);
   assert.doesNotMatch(lifecycle, /pnpm|provision-native-toolchains|continue-on-error/);
-  assert.match(job('publish'), /needs: \[build, native-analyzers\]/);
+  assert.match(job('publish'), /needs: validate/);
   /** 这些 GitHub guards 只使用 JS 同义的布尔运算；直接验证实际条件，避免要求不同职责共享文本。 */
   const enabled = (name, event, scope, language, publish, ref, platform = 'all') => runInNewContext(job(name).match(/^ {4}if: (.+)$/m)[1], {
     github: { event_name: event, ref }, inputs: { validation_scope: scope, language, publish, platform },
@@ -82,8 +83,8 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   for (const platform of ['macos', 'windows']) {
     assert.equal(enabled('publish', 'workflow_dispatch', 'full', 'all', true, 'refs/heads/main', platform), false);
   }
-  for (const name of ['build', 'native-analyzers']) assert.equal(enabled(name, 'pull_request', undefined, undefined, undefined, 'refs/pull/1/merge'), true);
-  assert.equal(enabled('windows-lifecycle', 'pull_request', undefined, undefined, undefined, 'refs/pull/1/merge'), false);
+  for (const name of ['build', 'native-analyzers']) assert.equal(enabled(name, 'pull_request', 'full', 'all', false, 'refs/pull/1/merge'), true);
+  assert.equal(enabled('windows-lifecycle', 'pull_request', 'full', 'all', false, 'refs/pull/1/merge'), false);
 });
 
 // 执行工作流实际矩阵表达式，确认单平台验收不会调度另一平台，默认仍覆盖两个目标。
@@ -114,26 +115,27 @@ test('native jobs use the hosted image matching their target', async () => {
   }
 });
 
-// 仅验收时可省去产物存储；自动 PR 与正式发布仍必须上传，不能用此开关绕过发布输入。
-test('manual validation can omit artifacts while pull requests and publishing retain uploads', async () => {
+// PR 可省去大体积产物；发布入口始终要求上传，不能用验收选项绕过发布输入。
+test('validation can omit artifacts while publishing always retains uploads', async () => {
   const workflow = await readLanguageWorkflow();
   for (const name of ['build', 'native-analyzers']) {
     const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
     const upload = job.split('      - uses: actions/upload-artifact@')[1].split('\n      - ')[0];
-    const condition = upload.match(/^ {8}if: (.+)$/m)?.[1] ?? 'success()';
-    for (const [event, uploadArtifacts, publish, expected] of [
-      ['workflow_dispatch', false, false, false],
-      ['workflow_dispatch', true, false, true],
-      ['workflow_dispatch', false, true, true],
-      ['workflow_dispatch', true, true, true],
-      ['pull_request', undefined, undefined, true],
-    ]) {
-      const selected = runInNewContext(condition, {
-        github: { event_name: event }, inputs: { upload_artifacts: uploadArtifacts, publish },
-        always: () => true, success: () => true,
-      });
-      assert.equal(Boolean(selected), expected, `${name}: ${event}, upload=${uploadArtifacts}, publish=${publish}`);
+    const condition = upload.match(/^ {8}if: (.+)$/m)[1];
+    for (const uploadArtifacts of [false, true]) {
+      assert.equal(runInNewContext(condition, {
+        inputs: { upload_artifacts: uploadArtifacts }, always: () => true,
+      }), uploadArtifacts);
+    }
+    assert.match(upload, /retention-days: 7/);
+  }
+  const publishing = await readLanguageWorkflow('language-support-packs.yml');
+  const expression = publishing.match(/upload_artifacts: \$\{\{ (.+) \}\}/)[1];
+  for (const uploadArtifacts of [false, true]) {
+    for (const publish of [false, true]) {
+      assert.equal(runInNewContext(expression, {
+        inputs: { upload_artifacts: uploadArtifacts, publish },
+      }), uploadArtifacts || publish);
     }
   }
-  assert.match(workflow, /upload_artifacts:\n[\s\S]*?type: boolean\n\s+default: true/);
 });

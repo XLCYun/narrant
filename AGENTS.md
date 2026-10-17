@@ -53,9 +53,9 @@ Single-context layout. See `docs/agents/domain.md`.
 
 1. 日常修改先在本地运行格式、类型检查、`check --lib` 和受影响测试；UI 改动仍完成真实渲染检查。
 2. 功能基本完成后进行实际运行验证和代码审查；涉及 Windows 路径、进程、权限或打包时，提前运行对应 Windows 专项 CI。
-3. 准备合并时，对最终提交集中完成必要的 macOS、Windows CI。按具体命令核对覆盖范围；支持包构建不能替代全仓或真实应用验收。
+3. 指向 `main` 的 PR 自动运行完整 CI，合入前确认最新提交的 `Complete CI` 检查通过；它汇总双平台 Rust、桌面 E2E、前端与脚本测试及全部 Native Helper 验收。不要使用 `[skip ci]` 绕过这项检查。
 4. 同一提交的完整测试已在 CI 通过时，本地无需重复执行；失败修复后重跑受影响范围，共享契约变化或全局回归扩大验证。
 5. Release、应用更新及语言支持包统一使用 `XLCYun/narrant`。发布与首版 bootstrap 按 `docs/specs/0017-application-updates.md` 和发布运维说明执行；保持既有应用身份 `com.cyunlab.narrant`。
 
 ## 不要手动触发 quality-gate
-不要手动触发 quality-gate.
+通过 PR 自动 CI 获取合并证据，不要额外手动触发 `quality-gate`。签名、公证、发布和正式升级验收仍走发布流程；详见 `docs/development.md` 的 CI 说明。

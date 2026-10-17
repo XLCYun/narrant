@@ -10,7 +10,8 @@ import { validateToolchainManifest, verifyArchive } from '../provision-native-to
 import { runVerificationCommands, validateNativeConfiguration, verificationCommands } from '../verify-native-analyzers.mjs';
 
 const manifest = JSON.parse(await fs.readFile(new URL('../../resources/native-toolchains.json', import.meta.url), 'utf8'));
-const workflowSource = await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8');
+const workflowSource = (await fs.readFile(new URL('../../.github/workflows/validate-language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+const publishingWorkflow = (await fs.readFile(new URL('../../.github/workflows/language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
 
 // 用真实 Cargo 解析生产命令生成的 runner 配置，覆盖 Node → Git Bash → 缓存入口边界。
 test('Rust helper runner configuration survives the complete Cargo agent chain', async () => {
@@ -73,11 +74,10 @@ for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
     assert.doesNotMatch(probe, /continue-on-error/);
   });
 
-  // 快速诊断不替代完整验收，也不能改变主程序缓存或让探针源码漏掉 PR 触发。
+  // 快速诊断不替代共用完整验收，也不能改变主程序缓存。
   test(`early probe retains complete native acceptance with hosted caches (${lineEnding})`, () => {
     const nativeJob = workflow.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
-    assert.match(workflow.split('\njobs:')[0], /- native-helpers\/\*\*\r?\n/);
-    assert.match(workflow.split('\njobs:')[0], /- scripts\/run-windows-process-probe\.mjs\r?\n/);
+    assert.match(workflow.split('\njobs:')[0], /workflow_call:\r?\n/);
     assert.match(nativeJob, /node --test [^\n]*scripts\/tests\/run-windows-process-probe\.test\.mjs/);
     assert.match(nativeJob, /Swatinem\/rust-cache/);
     assert.doesNotMatch(nativeJob, /CARGO_TARGET_DIR/);
@@ -285,14 +285,14 @@ test('focused acceptance requires only the selected tools and keeps shared integ
 
 // 聚焦验收必须跳过其他语言构建及无关声明工具准备。
 test('focused workflow skips unrelated builds and declaration provisioning', () => {
-  assert.match(workflowSource, /options: \[all, typescript-javascript, rust, python, java, go, csharp, c-cpp\]/);
+  assert.match(publishingWorkflow, /options: \[all, typescript-javascript, rust, python, java, go, csharp, c-cpp\]/);
   const build = workflowSource.split('\n  build:')[1].split('\n  native-analyzers:')[0];
   assert.match(build, /inputs\.language == 'all'/);
   const native = workflowSource.split('\n  native-analyzers:')[1].split('\n  publish:')[0];
   assert.equal((native.match(/--language "\$\{\{ inputs.language \|\| 'all' \}\}"/g) ?? []).length, 2);
   assert.equal((native.match(/inputs\.language == 'c-cpp'/g) ?? []).length, 1);
   assert.doesNotMatch(native, /verify-macos-runner|self-hosted/);
-  assert.match(workflowSource.split('\n  publish:')[1], /inputs\.language == 'all'/);
+  assert.match(publishingWorkflow.split('\n  publish:')[1], /inputs\.language == 'all'/);
 });
 
 /** TS 聚焦门禁必须运行真实安装和 Review，不使用旧服务或空筛选充当验收。 */

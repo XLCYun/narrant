@@ -1,0 +1,200 @@
+name: Validate language support packs
+
+on:
+  workflow_call:
+    inputs:
+      validation_scope:
+        type: string
+        default: full
+      language:
+        type: string
+        default: all
+      platform:
+        type: string
+        default: all
+      upload_artifacts:
+        type: boolean
+        default: true
+
+# PR 与发布准备共用只读验收；实际发布权限仅留在手动发布入口。
+permissions:
+  contents: read
+
+jobs:
+  windows-lifecycle:
+    if: inputs.validation_scope == 'windows-lifecycle'
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
+      - name: Validate lifecycle runner
+        run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/run-tauri.test.mjs
+      - name: Run process and Native Helper lifecycle checks from production sources
+        run: node scripts/run-windows-lifecycle-tests.mjs
+
+  build:
+    if: inputs.validation_scope == 'full' && inputs.language == 'all'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: >-
+          ${{ fromJSON(
+            inputs.platform == 'windows' && '[{"target":"x86_64-pc-windows-msvc"}]' ||
+            inputs.platform == 'macos' && '[{"target":"aarch64-apple-darwin"}]' ||
+            '[{"target":"aarch64-apple-darwin"},{"target":"x86_64-pc-windows-msvc"}]'
+          ) }}
+    runs-on: ${{ matrix.target == 'aarch64-apple-darwin' && 'macos-15' || 'windows-2022' }}
+    # Windows 冷构建包含 release 打包、helper 测试与 Host 编译，使用完整验收的总预算。
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.13.1
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --test scripts/tests/archive-validation.test.mjs scripts/tests/language-support-packs.test.mjs scripts/tests/native-language-support-packs.test.mjs
+      # 锁定 Ruff 源码包含超过 MAX_PATH 的快照；Cargo 的 libgit2 checkout 读取此配置。
+      - name: Enable Windows Git checkout long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+      - name: Prepare pinned Rust helper build toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Build and execute native tools
+        run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
+      - name: Verify native Python graphs, installation, and Review lifecycle
+        run: node scripts/verify-python-analyzer.mjs language-support-packs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # PR 只验收；手动入口按需上传，发布入口强制保留产物。
+        if: inputs.upload_artifacts
+        with:
+          retention-days: 7
+          name: language-support-packs-${{ matrix.target }}
+          path: language-support-packs/
+          if-no-files-found: error
+
+  native-analyzers:
+    if: inputs.validation_scope != 'windows-lifecycle'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: >-
+          ${{ fromJSON(
+            inputs.platform == 'windows' && '[{"target":"x86_64-pc-windows-msvc"}]' ||
+            inputs.platform == 'macos' && '[{"target":"aarch64-apple-darwin"}]' ||
+            '[{"target":"aarch64-apple-darwin"},{"target":"x86_64-pc-windows-msvc"}]'
+          ) }}
+    runs-on: ${{ matrix.target == 'aarch64-apple-darwin' && 'macos-15' || 'windows-2022' }}
+    # Windows 冷编译七套 helper 与 Host，再运行全部测试，需要超过两小时。
+    timeout-minutes: 180
+    env:
+      # 测试项目选择独立于 helper 的固定构建版本，缓存必须由本次 setup 显式准备。
+      NARRANT_PROJECT_RUST_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.13.1
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ runner.os }}-native
+      - name: Probe Windows process cleanup before toolchain provisioning
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/run-windows-process-probe.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Windows process cleanup probe failed; see job membership and process handle evidence above' }
+      - run: pnpm install --frozen-lockfile
+      - name: Test native validation and pack scripts
+        run: node --test scripts/tests/archive-validation.test.mjs scripts/tests/native-analyzer-ci.test.mjs scripts/tests/run-windows-process-probe.test.mjs scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/native-language-support-packs.test.mjs scripts/tests/native-xz-extraction.test.mjs scripts/tests/select-msvc-redist.test.mjs
+      # 只准备 CI 工具源码 checkout；保持独立 Cargo home 和用户项目离线分析策略。
+      - name: Enable Windows Git checkout long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+      - name: Select isolated Windows SDK and MSVC declaration roots
+        if: runner.os == 'Windows' && (inputs.language == '' || inputs.language == 'all' || inputs.language == 'c-cpp')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixed = (Get-Content resources/native-toolchains.json -Raw | ConvertFrom-Json).runner_prerequisites.'x86_64-pc-windows-msvc'
+          $version = $fixed.msvc_tools
+          # 发现含固定工具集的 VS 2022 实例，兼容已安装的 Build Tools。
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'Visual Studio Installer vswhere.exe is missing' }
+          # 先等待原生命令完整退出，避免 First 提前终止管道而留下空退出码。
+          $installations = @(& $vswhere -products '*' -version '[17.0,18.0)' -property installationPath)
+          if ($LASTEXITCODE -ne 0) { throw "VS 2022 discovery failed with exit code $LASTEXITCODE" }
+          $vs = $installations |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ "VC\Tools\MSVC\$version\include") -PathType Container } |
+            Select-Object -First 1
+          if (!$vs) { throw "No VS 2022 instance contains MSVC $version" }
+          $msvc = "$vs\VC\Tools\MSVC\$version"
+          $sdk = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Include\$($fixed.windows_sdk)"
+          foreach ($directory in @("$msvc\include", "$sdk\ucrt", "$sdk\um", "$sdk\shared")) {
+            if (!(Test-Path $directory -PathType Container)) { throw "Missing exact SDK directory: $directory" }
+          }
+          node scripts/select-msvc-redist.mjs "$vs" "$($fixed.msvc_runtime_version)"
+          if ($LASTEXITCODE -ne 0) { throw 'Fixed MSVC runtime selection failed; see metadata and DLL version evidence above' }
+          "NARRANT_MSVC_ROOT=$msvc" >> $env:GITHUB_ENV
+          "NARRANT_MSVC_VERSION=$version" >> $env:GITHUB_ENV
+          "NARRANT_WINDOWS_SDK=$sdk" >> $env:GITHUB_ENV
+          "NARRANT_WINDOWS_SDK_VERSION=$($fixed.windows_sdk)" >> $env:GITHUB_ENV
+          "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
+      - name: Provision checksum-verified analyzer toolchains
+        run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
+      - name: Select isolated Rust project test Cargo home
+        env:
+          NARRANT_RUST_TEST_CARGO_HOME: ${{ runner.temp }}/narrant-native-cargo
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'CARGO_HOME=' + process.env.NARRANT_RUST_TEST_CARGO_HOME + '\n')"
+      - name: Prepare pinned Rust helper build toolchain
+        if: inputs.language == 'all' || inputs.language == 'rust' || inputs.language == 'python'
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Prepare Rust project sources and historical Cargo test inputs
+        if: inputs.language == 'all' || inputs.language == 'rust'
+        run: |
+          rustup component add rust-src --toolchain stable
+          rustup toolchain install 1.81.0 1.94.0 1.96.0 --profile minimal
+          node scripts/prepare-rust-native-tests.mjs --prepare
+      - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance
+        run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build --language "${{ inputs.language || 'all' }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && inputs.upload_artifacts
+        with:
+          retention-days: 7
+          name: native-analyzers-${{ matrix.target }}
+          path: |
+            native-language-support-packs/*/*/*/manifest.json
+            native-language-support-packs/*/*/*/pack.tar.gz
+            native-language-support-packs/native-helpers-config.json
+          if-no-files-found: warn

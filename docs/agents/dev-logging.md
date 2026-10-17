@@ -55,6 +55,6 @@ Rig 请求必须继续设置 `record_content_telemetry(false)`。工具日志只
 
 CI 使用确定性 fixture，不运行真实 model endpoint，也不依赖日志文本颜色、时间戳或完整排版。
 日志测试只验证过滤、关联字段、耗时字段、允许/禁止的字段集合，以及 Release 不初始化 subscriber。
-不要手动触发 `quality-gate`。
+完整 CI 的触发与合并规则见仓库根目录 `AGENTS.md`。
 
 真实 Custom endpoint 的人工验证步骤见 [Babysit smoke test](babysit-smoke.md)。

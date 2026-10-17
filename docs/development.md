@@ -82,5 +82,24 @@ src-tauri\target\release\bundle\nsis\Narrant_<version>_x64-setup.exe
 
 ## 本地开发
 
+### 合并前 CI
+
+指向 `main` 的 PR（包括草稿）在创建、推送新提交或重新打开时自动运行 `CI`。
+入口没有文件路径过滤，同一 PR 的新运行会取消尚未结束的旧运行。
+
+- `quality-gate.yml` 运行 macOS ARM64 / Windows x64 的 Rust 静态检查、单元、集成和
+  文档测试，以及双平台真实 Tauri E2E；前端 Lint、类型检查、构建、组件与脚本测试也在此完成。
+- `validate-language-support-packs.yml` 运行双平台支持包构建与全部七套 Native Helper 验收。
+  PR 运行不上传大体积支持包；需要下载候选时使用原有手动语言包入口，上传产物保留 7 天。
+- `Complete CI` 只在上述两套验收都成功时通过；失败、取消、跳过或缺失结果都不能放行。
+  `main` 的必过检查使用此名称，合入前还要求分支包含最新 `main`。
+
+PR 验收使用标准 GitHub-hosted 临时机器，不需要签名或发布凭据。签名、公证、Release 和
+正式安装升级验收仍由发布流程执行；PR 通过不等于正式包升级已通过。真实模型 endpoint
+等人工专项仍按各自说明执行，不纳入公开 PR 的确定性测试。
+
+日常修改继续先做本地聚焦验证，无需为每次小改重复完整测试。修改已推送后，以当前 PR
+完整 CI 的结果为合并依据；此前提交或部分专项的绿灯不能替代它。
+
 Custom Babysit 的确定性 smoke、终端开发日志和数据保密边界见
 [开发日志](agents/dev-logging.md) 与 [Babysit smoke test](agents/babysit-smoke.md)。
