@@ -39,10 +39,10 @@ jobs:
         run: bash scripts/cargo-agent.sh fmt --all --manifest-path src-tauri/Cargo.toml -- --check
       - name: Rust 静态检查
         run: bash scripts/cargo-agent.sh clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-      - name: Rust 单元、集成及文档测试
-        run: |
-          bash scripts/cargo-agent.sh test --locked --manifest-path src-tauri/Cargo.toml --all-targets
-          bash scripts/cargo-agent.sh test --locked --manifest-path src-tauri/Cargo.toml --doc
+      - name: Rust 单元及集成测试
+        run: bash scripts/cargo-agent.sh test --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      - name: Rust 文档测试
+        run: bash scripts/cargo-agent.sh test --locked --manifest-path src-tauri/Cargo.toml --doc
 
   typescript:
     runs-on: macos-15

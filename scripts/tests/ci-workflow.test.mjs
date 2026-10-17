@@ -52,6 +52,12 @@ test('application acceptance includes Rust and desktop E2E on both supported pla
   for (const command of ['fmt --all', 'clippy --locked', '--all-targets', '--doc', 'pnpm lint', 'pnpm build', 'pnpm test', 'pnpm test:scripts']) {
     assert.ok(quality.includes(command), command);
   }
+  // Windows 默认 PowerShell 以最后一个原生命令的退出码结束；每组测试独立报告失败。
+  const rustTestSteps = quality.split(/(?=^ {6}- )/m).filter(step => step.includes('bash scripts/cargo-agent.sh test'));
+  assert.equal(rustTestSteps.length, 2);
+  for (const step of rustTestSteps) {
+    assert.equal(step.match(/bash scripts\/cargo-agent\.sh test/g).length, 1);
+  }
   for (const [job, runner] of [['windows-e2e', 'windows-2022'], ['macos-e2e', 'macos-15']]) {
     const source = quality.split(`\n  ${job}:`)[1].split(/\n {2}\S/)[0];
     assert.ok(source.includes(`runs-on: ${runner}`));
