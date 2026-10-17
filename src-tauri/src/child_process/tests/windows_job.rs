@@ -71,13 +71,18 @@ fn native_windows_suspended_root_is_owned_and_deduplicated() {
     assert!(!directory.path().join("leaf-ready").exists());
 }
 
-/// 在短命根进程退出期间反复查询，覆盖成员计数与 PID 快照交错更新的窗口。
+/// 在带工作线程的 Node 根退出期间反复查询，覆盖 Native Helper 的实际退出模式。
 #[test]
 fn native_windows_member_snapshot_tolerates_root_exit() {
-    let directory = tempfile::tempdir().unwrap();
+    use crate::child_process::test_support::node_executable;
+
     for iteration in 0..128 {
-        let (mut pending, job) =
-            WindowsJob::spawn_suspended(&mut fixture_command("short", directory.path())).unwrap();
+        let mut command = Command::new(node_executable());
+        command.args([
+            "--eval",
+            "const { Worker } = require('node:worker_threads'); new Worker('', { eval: true });",
+        ]);
+        let (mut pending, job) = WindowsJob::spawn_suspended(&mut command).unwrap();
         let child = pending.0.as_mut().unwrap();
         let observed = child.as_handle().try_clone_to_owned().unwrap();
         resume_initial_thread(child.id()).unwrap();
