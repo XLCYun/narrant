@@ -63,11 +63,12 @@ fn downloading_runtime() -> (
             _ => None,
         })
         .unwrap();
+    let (target, install_kind) = current_install_plan().unwrap();
     let package = super::super::ReleasePackage::new(
         "https://github.com/XLCYun/narrant/releases/download/v2.0.0/Narrant.tar.gz",
         encode(SIGNATURE),
-        super::super::platform::MACOS_TARGET,
-        super::super::InstallKind::MacosAppArchive,
+        target,
+        install_kind,
     )
     .unwrap();
     let release = StableRelease::new("2.0.0", "notes", package);
@@ -178,11 +179,12 @@ fn runtime_converts_leaked_prerelease_domain_error_into_ordered_manifest_failure
             _ => None,
         })
         .unwrap();
+    let (target, install_kind) = current_install_plan().unwrap();
     let package = super::super::ReleasePackage::new(
         "https://github.com/XLCYun/narrant/releases/download/v2.0.0/Narrant.tar.gz",
         "signature",
-        super::super::platform::MACOS_TARGET,
-        super::super::InstallKind::MacosAppArchive,
+        target,
+        install_kind,
     )
     .unwrap();
     let failed = runtime
@@ -460,19 +462,12 @@ fn post_stop_staging_try_lock_busy_returns_without_waiting() {
 fn runtime_ready_keeps_recovery_warning_queryable_and_repository_can_continue() {
     let cache = tempfile::tempdir().expect("cache");
     let data = tempfile::tempdir().expect("data");
-    let target = super::super::platform::MACOS_TARGET;
-    let context =
-        StagingContext::new("1.0.0", target, super::super::InstallKind::MacosAppArchive).unwrap();
+    let (target, install_kind) = current_install_plan().unwrap();
+    let context = StagingContext::new("1.0.0", target, install_kind).unwrap();
     let verifier = DiskMinisignVerifier::new(&encode(PUBLIC_KEY)).unwrap();
     let mut repository = StagingRepository::open(cache.path(), context, verifier).unwrap();
-    let candidate = StageCandidate::new(
-        "2.0.0",
-        encode(SIGNATURE),
-        target,
-        super::super::InstallKind::MacosAppArchive,
-        "notes",
-    )
-    .unwrap();
+    let candidate =
+        StageCandidate::new("2.0.0", encode(SIGNATURE), target, install_kind, "notes").unwrap();
     repository.stage(candidate, Cursor::new(b"test")).unwrap();
     drop(repository);
     let staging_root = cache.path().join("application-update");

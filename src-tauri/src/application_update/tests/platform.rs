@@ -104,6 +104,7 @@ fn macos_permission_denied_replacement_selects_authorized_fallback() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
 fn macos_authorized_script_quotes_paths_and_keeps_old_app_until_commit() {
     let script = build_macos_authorization_script(
@@ -146,11 +147,13 @@ fn macos_authorized_script_rejects_non_utf8_and_control_character_paths() {
 }
 
 /// 记录提权脚本并返回预设的系统授权结果。
+#[cfg(unix)]
 struct ScriptedAuthorization {
     outcome: Option<io::Result<MacosAuthorizationOutcome>>,
     scripts: Vec<String>,
 }
 
+#[cfg(unix)]
 impl MacosAuthorizationBoundary for ScriptedAuthorization {
     fn run(&mut self, script: &str) -> io::Result<MacosAuthorizationOutcome> {
         self.scripts.push(script.to_owned());
@@ -158,6 +161,7 @@ impl MacosAuthorizationBoundary for ScriptedAuthorization {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn macos_authorization_reports_success_denial_and_preserved_backup() {
     let source = Path::new("/tmp/Narrant.app");

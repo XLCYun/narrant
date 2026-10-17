@@ -117,6 +117,11 @@ impl ClaudeCodeProvider {
             &schema,
             request.repository_exploration,
         );
+        #[cfg(all(test, windows))]
+        if !self.prefix_args.is_empty() {
+            // Git Bash 测试进程必须按字面量接收 JSON，禁止 MSYS 启动时展开花括号和通配符。
+            command.env("MSYS", "noglob");
+        }
         command
             .current_dir(&request.workspace_path)
             .stdin(Stdio::piped())
