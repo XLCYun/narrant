@@ -254,7 +254,12 @@ impl JobTracker {
             if success == 0 || info.NumberOfProcessIdsInList < info.NumberOfAssignedProcesses {
                 let capacity = (info.NumberOfAssignedProcesses as usize).max(buffer.len() * 2);
                 if capacity > MAX_PROCESSES {
-                    return Err(io::Error::other("Windows Job 成员列表超限"));
+                    return Err(io::Error::other(format!(
+                        "Windows Job 成员列表超限：查询成功 {success}，分配 {}，返回 {}，容量 {}",
+                        info.NumberOfAssignedProcesses,
+                        info.NumberOfProcessIdsInList,
+                        buffer.len() - HEADER,
+                    )));
                 }
                 buffer.resize(HEADER + capacity, 0);
                 continue;

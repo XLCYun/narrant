@@ -71,6 +71,33 @@ fn native_windows_suspended_root_is_owned_and_deduplicated() {
     assert!(!directory.path().join("leaf-ready").exists());
 }
 
+/// 在短命根进程退出期间反复查询，覆盖成员计数与 PID 快照交错更新的窗口。
+#[test]
+fn native_windows_member_snapshot_tolerates_root_exit() {
+    let directory = tempfile::tempdir().unwrap();
+    for iteration in 0..128 {
+        let (mut pending, job) =
+            WindowsJob::spawn_suspended(&mut fixture_command("short", directory.path())).unwrap();
+        let child = pending.0.as_mut().unwrap();
+        let observed = child.as_handle().try_clone_to_owned().unwrap();
+        resume_initial_thread(child.id()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            job.tracker
+                .lock()
+                .unwrap()
+                .supplement(job.raw(), deadline)
+                .unwrap_or_else(|error| panic!("iteration {iteration}: {error}"));
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+        }
+        job.terminate_and_wait().unwrap();
+        assert_eq!(retained_status(&observed), WAIT_OBJECT_0);
+        drop(pending);
+    }
+}
+
 /// 确实错过短命对象时，累计缺口必须失败且重试不能擦掉失败历史。
 #[test]
 fn native_windows_missing_history_is_sticky() {
