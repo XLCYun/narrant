@@ -440,7 +440,9 @@ fn query_process_ids(
         };
         // SAFETY: 固定头部位于有效且正确对齐的缓冲区内。
         let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
-        if !success || info.NumberOfProcessIdsInList < info.NumberOfAssignedProcesses {
+        // Windows 在退出期间会成功返回 assigned > listed 的快照，这不代表空间不足。
+        // 仅 ERROR_MORE_DATA 触发扩容；完整回收仍由准确句柄和累计 TotalProcesses 核对。
+        if !success {
             let capacity = (info.NumberOfAssignedProcesses as usize).max(buffer.len() * 2);
             if capacity > MAX_PROCESSES {
                 return Err(io::Error::other(format!(

@@ -34,8 +34,8 @@ fn current_members(job: &WindowsJob) -> io::Result<Vec<u32>> {
     // SAFETY: 固定头部完全落在上面的对齐缓冲区内。
     let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
     let count = info.NumberOfProcessIdsInList as usize;
-    if count > 16 || info.NumberOfAssignedProcesses != info.NumberOfProcessIdsInList {
-        return Err(io::Error::other("小型 Job 夹具的成员列表不完整"));
+    if count > 16 {
+        return Err(io::Error::other("小型 Job 夹具的成员列表长度无效"));
     }
     buffer[HEADER..HEADER + count]
         .iter()
