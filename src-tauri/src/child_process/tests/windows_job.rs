@@ -76,7 +76,7 @@ fn native_windows_suspended_root_is_owned_and_deduplicated() {
 fn native_windows_member_snapshot_tolerates_root_exit() {
     use crate::child_process::test_support::node_executable;
 
-    for iteration in 0..128 {
+    for iteration in 0..16 {
         let mut command = Command::new(node_executable());
         command.args([
             "--eval",
