@@ -152,6 +152,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 当前状态无匹配条目时，显示包含所选状态的空结果提示和切换说明，筛选控件始终保留；整个列表为空时继续区分未连接、无 Pull Request 与请求失败，局部失败提示不因筛选而隐藏。
 - 多个 GitHub repository 的 Pull Requests 使用一个按 GitHub 最近更新时间降序排列的扁平列表，不按 Git remote 或 GitHub repository 分组。只有发现多个不同 GitHub repository identity 时，每行才以弱化标签显示 `owner/repository`；`origin`、`upstream` 等 remote 名称仅用于诊断，不进入正常界面。
 - Pull Request 行在标题中显示一次 `#编号`，右侧操作只显示“开始审核”或“继续审核”；整行不作为点击目标。列表显示 Pull Request 相对更新时间。
+- Pull Request 行内的生命周期状态使用现有 Badge 胶囊标签：Open 为绿色、Closed 为红色、Merged 为紫色，配合对应的 PR、关闭 PR、合并图标及中英文状态文案；浅色与深色主题均采用状态色的淡底和清晰文字。草稿标记独立保留，状态筛选按钮仍使用 Tabs 的默认样式。
 - Pull Request 标签先展示本地持久化的 Pull Request Review 元数据，再后台发现 GitHub Pull Request。尚未创建 Review 的 Pull Request 不做离线列表缓存。
 - GitHub 不可用时，已保存的 Pull Request Review 仍留在 Pull Requests 标签中，并以低干扰提示说明元数据可能不是最新。
 - Pull Request 空状态区分未连接 GitHub、确实没有 Pull Request 和 GitHub 请求失败；连接 GitHub 必须由用户主动触发。

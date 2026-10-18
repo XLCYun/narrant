@@ -44,11 +44,24 @@ type PullRequestRow = {
 
 /** 仅控制当前概览中可见条目的生命周期筛选，不写入 Review 或 GitHub。 */
 type PullRequestStateFilter = "open" | "closed" | "merged" | "all";
-/** 四态筛选各自使用对应的 PR 生命周期图标，All 使用完整列表图标。 */
+/** 生命周期图标由筛选与行标签共用，颜色只用于行内胶囊标签。 */
+const pullRequestStates = [
+  {
+    value: "open", icon: GitPullRequestIcon,
+    badgeClassName: "border-emerald-600/20 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/25 dark:bg-emerald-400/10 dark:text-emerald-300",
+  },
+  {
+    value: "closed", icon: GitPullRequestClosedIcon,
+    badgeClassName: "border-rose-600/20 bg-rose-500/10 text-rose-700 dark:border-rose-400/25 dark:bg-rose-400/10 dark:text-rose-300",
+  },
+  {
+    value: "merged", icon: GitMergeIcon,
+    badgeClassName: "border-violet-600/20 bg-violet-500/10 text-violet-700 dark:border-violet-400/25 dark:bg-violet-400/10 dark:text-violet-300",
+  },
+] as const;
+/** All 使用完整列表图标，筛选按钮继续沿用 Tabs 的默认样式。 */
 const pullRequestStateFilters = [
-  { value: "open", icon: GitPullRequestIcon },
-  { value: "closed", icon: GitPullRequestClosedIcon },
-  { value: "merged", icon: GitMergeIcon },
+  ...pullRequestStates,
   { value: "all", icon: ListViewIcon },
 ] as const;
 
@@ -119,7 +132,7 @@ function mergePullRequests(reviews: RepositoryReviewSummary[], groups: PullReque
 
 /** Repository 的任务概览：缓存优先呈现 Pull Request，并隔离远端失败。 */
 export function RepositoryOverview(props: Props) {
-  const { t, i18n } = useTranslation(["repository", "common", "github"]);
+  const { t, i18n } = useTranslation(["repository", "common", "github", "review"]);
   const [stateFilter, setStateFilter] = useState<PullRequestStateFilter>("open");
   const rows = mergePullRequests(props.reviews, props.pullRequestGroups);
   const visibleRows = rows.filter((row) => stateFilter === "all" || rowMetadata(row).state === stateFilter);
@@ -185,6 +198,7 @@ export function RepositoryOverview(props: Props) {
                 {visibleRows.map((row) => {
                   const savedSelection = row.saved?.selection.kind === "pull-request" ? row.saved.selection : undefined;
                   const metadata = rowMetadata(row);
+                  const stateAppearance = pullRequestStates.find(({ value }) => value === metadata.state);
                   const baseRef = row.discovered?.base.ref ?? savedSelection?.baseRef;
                   const headRef = row.discovered?.head.ref ?? savedSelection?.headRef;
                   const updated = Boolean(row.saved && row.discovered && (
@@ -203,7 +217,11 @@ export function RepositoryOverview(props: Props) {
                         {updated && <Badge>{t("repository:updateAvailable")}</Badge>}
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span>{metadata.authorUsername}</span><span>{metadata.state}</span>
+                        <span>{metadata.authorUsername}</span>
+                        <Badge variant="secondary" className={stateAppearance?.badgeClassName}>
+                          {stateAppearance && <Icon icon={stateAppearance.icon} data-icon="inline-start" aria-hidden />}
+                          {stateAppearance ? t(`review:state.${stateAppearance.value}`) : metadata.state}
+                        </Badge>
                         {baseRef && headRef && <BranchRelation baseRef={baseRef} headRef={headRef} />}
                         {githubUpdatedAt && <time dateTime={githubUpdatedAt}>{formatRelativeTime(rowUpdatedAt(row), Date.now(), locale)}</time>}
                       </div>
