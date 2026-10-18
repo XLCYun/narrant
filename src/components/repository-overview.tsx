@@ -161,7 +161,6 @@ export function RepositoryOverview(props: Props) {
                 {pullRequestStateFilters.map(({ value, icon }) => <TabsTrigger
                   key={value}
                   value={value}
-                  className="rounded-full data-active:border-primary/20 data-active:bg-primary/10 data-active:text-primary dark:data-active:border-emerald-300/25 dark:data-active:bg-emerald-500/15 dark:data-active:text-emerald-300"
                 >
                   <Icon icon={icon} aria-hidden />
                   {t(`repository:pullRequestFilter.${value}`)}

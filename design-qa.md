@@ -5,46 +5,26 @@ final result: passed
 ## 对照依据
 
 - 用户选定图：`/Users/lizhanfa/.codex/generated_images/01a14ae8-0cdc-7b31-9b86-dbc4750f8e97/exec-cba8ca4d-b334-457c-9b1c-60e9f2a3b6ed.png`。
-- 用户补充：四个可切换状态按钮使用正确图标与圆角，与上方任务导航复用同一个组件。
-- 实现截图：`/Users/lizhanfa/.codex/visualizations/2026/10/17/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-segmented-900.png`。
-- 全图对照：`/Users/lizhanfa/.codex/visualizations/2026/10/17/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-segmented-comparison.png`。
-- 工具栏局部对照：`/Users/lizhanfa/.codex/visualizations/2026/10/17/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-segmented-toolbar-comparison.png`。
-- 参考图像素为 1536×1024，按比例归一为 900×600。实现视口与截图均为 900×600（每 CSS px 对应 1 图像 px）。实现上方约 80px 为通用开发预览工具栏，不属于产品 UI；工具栏局部已按各自实际位置裁切，比较相同的 Open 选择、浅色主题和两条代表性 PR。
-- 本次是在现有应用内替换筛选入口，保留仓库字体、字号及列表行结构；按钮密度和圆角按用户要求沿用现有 shadcn Tabs，不复制生成图中的宽矩形分段。
+- 最新浏览器批注要求：状态按钮组与上方 Pull Requests / 本地分支 / 审核历史使用相同样式。
+- 两组按钮都直接使用现有 shadcn Tabs、TabsList、TabsTrigger。移除状态按钮单独添加的颜色和圆角覆盖，保持图标与筛选行为。
+- 浅色截图：`/Users/lizhanfa/.codex/visualizations/2026/10/18/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-default-tabs-light.png`。
+- 深色截图：`/Users/lizhanfa/.codex/visualizations/2026/10/18/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-default-tabs-dark.png`。
+- 窄窗口截图：`/Users/lizhanfa/.codex/visualizations/2026/10/18/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-default-tabs-narrow.png`。
+- 截图上方是通用开发预览工具栏，不属于产品 UI。生成图中的绿色选中态已由用户最新批注明确改为共享组件的默认样式。
 
-## 发现与修复
+## 本轮检查
 
-1. 首轮深色检查发现状态文字直接使用品牌主色时偏暗，属于 P2。
-   - 修复前：`/Users/lizhanfa/.codex/visualizations/2026/10/17/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-segmented-dark-before.png`。
-   - 修复：沿用现有 PR 状态徽章的浅翠绿色文字，配合淡翠绿色背景及边框；浅色主题保持品牌绿色。
-   - 修复后：`/Users/lizhanfa/.codex/visualizations/2026/10/17/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-segmented-dark.png`。文字从 oklch(0.448 0.119 151.328) 改为 oklch(0.845 0.143 164.978)，视觉复查清楚可辨。
-2. 复查无尚需处理的 P0/P1/P2 问题。
+- 应用内浏览器实际渲染尺寸为 900×600 和 390×844。浏览器保留用户原有缩放，通过 viewport 设置并读取 innerWidth / innerHeight 确认实际 CSS 尺寸。
+- 浅色下，上方 Pull Requests 与下方 Open 的计算样式完全一致：白色背景、前景色文字、透明边框、14px 圆角；按钮高度均约 29px。
+- 深色下，两组选中按钮的背景、文字、边框和圆角也完全一致，直接来自 TabsTrigger 默认主题样式。
+- 未选中的状态按钮与上方未选中任务标签使用相同的透明背景和次级文字颜色。
+- 390px 下，状态按钮组宽约 309.5px，四个状态完整显示；document.scrollWidth 为 390px，没有横向溢出。长标题仍截断，草稿与审核操作可见。
+- Open / Closed / Merged / All 分别显示 2 / 1 / 1 / 4 条代表性记录；鼠标、方向键、Enter、Home 和 Space 操作可用，上方 Pull Requests 始终保持选中。
+- 图标继续使用 Hugeicons：Open=GitPullRequestIcon，Closed=GitPullRequestClosedIcon，Merged=GitMergeIcon，All=ListViewIcon。
+- 浏览器控制台无 error/warn；结束时恢复浅色、Open 和默认 viewport（857×1289）。
 
-## 五项视觉检查
+## 验证范围
 
-- 字体：沿用 Oxanium；标签、标题、元信息层级清楚，长标题截断后草稿和审核操作仍可见。保留既有 14px 标签字号是产品约束。
-- 布局：状态控件与列表位于同一边框；两组均使用 Tabs、TabsList、TabsTrigger。390×844 下工具栏自然换行，四个状态全部显示；页面宽度为 390px，筛选组实测约 311px，无横向溢出。1440×900 下列表仍维持 max-w-6xl。
-- 颜色：浅色绿色选中态、上方白色任务标签与参考图一致；深色修复后选中态清晰，焦点与选中状态独立。
-- 图标与素材：全部使用项目现有 Hugeicons。Open=GitPullRequestIcon，Closed=GitPullRequestClosedIcon，Merged=GitMergeIcon，All=ListViewIcon；没有新增位图或自绘图标。
-- 文案：保留四态英文名称、状态标签、草稿、开始/继续审核和原有空结果说明；编号、作者及时间沿用真实组件规则。预览相对时间随时钟变化，未写死为参考图的“9小时前”。
-
-## 交互与证据
-
-- 宽窗口 1440×900、常规窗口 900×600、窄窗口 390×844；浅色与深色均实际渲染。
-- 依次切换 Open / Closed / Merged / All，显示 2 / 1 / 1 / 4 条代表性记录。
-- 方向键移动到 Merged 时 Closed 仍选中；Enter 选择 Merged，Space 可选择 Open。上方任务导航独立。
-- 已核对选中 Tab 的 aria-controls 指向实际面板，面板 aria-labelledby 指回选中 Tab。
-- 切去本地分支再返回保留 All；空筛选切换 All 恢复条目；重试刷新后仍选中 Merged，新增合并状态条目进入列表。
-- 继续审核触发正确预览动作；控制台无 error/warn。
-- 窄屏：`/Users/lizhanfa/.codex/visualizations/2026/10/17/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-segmented-390.png`；空结果：`/Users/lizhanfa/.codex/visualizations/2026/10/17/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-segmented-empty.png`；刷新：`/Users/lizhanfa/.codex/visualizations/2026/10/17/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-segmented-refresh.png`。
-- 已恢复默认 viewport。无新的弹层，原分支按钮等交互未变。
-
-## 实现检查清单
-
-- [x] 与任务导航复用 shadcn Tabs，保留独立选择上下文。
-- [x] 使用正确图标、圆角和清晰选中态。
-- [x] 四态筛选、空结果、导航往返、刷新及审核动作可用。
-- [x] 宽窄布局、长短内容、明暗主题和键盘操作通过浏览器检查。
-- [x] 50 项相关组件和 App 测试通过；静态双路审查无可操作发现。
-
-验收范围为真实 React 组件的通用 Preview Harness；未修改业务数据，未将其表述为原生桌面 E2E 或完整 CI 通过。
+- 本轮 `tests/repository-overview.test.tsx` 的 23 项测试通过，覆盖四态筛选、在线元数据优先、空结果和刷新保留等行为；未为样式删除新增重复测试。
+- 此前本 PR 的 50 项相关组件和 App 测试、1440px 宽窗口、空结果恢复、刷新、任务标签往返、ARIA 关联及审核动作检查已通过。
+- 本轮没有修改共享 Tabs、筛选逻辑、业务数据或 Tauri 代码。使用通用 Preview Harness 验收，完整 CI 结果以最新 PR 提交为准。
