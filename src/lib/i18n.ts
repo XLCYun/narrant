@@ -72,6 +72,10 @@ export const resources = {
       sidebar: "仓库侧边栏", tasks: "仓库任务", tabs: { pullRequests: "Pull Requests", branches: "本地分支", history: "审核历史" },
       refreshing: "正在后台刷新 Pull Requests。", stale: "在线元数据可能不是最新。", updateAvailable: "有更新",
       draft: "草稿", noPullRequests: "没有可审核的 Pull Request", noPullRequestsDescription: "当前 GitHub 仓库暂时没有可审核的 Pull Request。",
+      pullRequestFilter: {
+        label: "状态", accessibleLabel: "Pull Request 状态", open: "已开启", closed: "已关闭", merged: "已合并", all: "全部",
+        empty: "没有{{state}}的 Pull Request", emptyDescription: "可以切换状态查看其他 Pull Request。",
+      },
       connectForPrivate: "连接 GitHub 以访问授权范围内的 Pull Request",
       loadFailed: "无法加载 Pull Requests", partialFailure: "{{repository}} 暂时无法加载：{{error}}",
       retry: "重新尝试", noHistory: "尚无审核历史",
@@ -230,6 +234,10 @@ export const resources = {
       sidebar: "Repository sidebar", tasks: "Repository tasks", tabs: { pullRequests: "Pull Requests", branches: "Local branches", history: "Review history" },
       refreshing: "Refreshing Pull Requests in the background.", stale: "Online metadata may be out of date.", updateAvailable: "Update available",
       draft: "Draft", noPullRequests: "No Pull Requests to review", noPullRequestsDescription: "The current GitHub repositories have no Pull Requests to review.",
+      pullRequestFilter: {
+        label: "Status", accessibleLabel: "Pull Request status", open: "Open", closed: "Closed", merged: "Merged", all: "All",
+        empty: "No {{state}} Pull Requests", emptyDescription: "Choose another status to see other Pull Requests.",
+      },
       connectForPrivate: "Connect GitHub to access authorized Pull Requests",
       loadFailed: "Could not load Pull Requests", partialFailure: "{{repository}} could not be loaded: {{error}}",
       retry: "Try again", noHistory: "No review history",

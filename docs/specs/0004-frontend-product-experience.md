@@ -146,8 +146,14 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - Repository 概览默认只显示仓库名称；完整本地路径通过仓库名称的 hover 与键盘 focus Tooltip 提供，路径不截断并允许换行。
 - Repository 概览主内容左对齐，宽窗口中的最大宽度为约 1100–1200px；三个任务标签保留紧凑胶囊式选中态。
 - Pull Request 列表把未创建 Review 与已有 Review 分别标记为“开始审核”和“继续审核”。相同 Pull Request Selection 继续复用已有 Review。
+- 每次进入一个 Repository 概览时，Pull Requests 状态筛选默认选择 `Open`，可切换 `Open`、`Closed`、`Merged` 和 `All`；`Closed` 只包含关闭但未合并的条目，未关闭的 Draft 归入 `Open`。筛选在合并已保存 Review 与在线发现条目后统一执行，在线元数据可用时以在线状态为准。
+- 状态筛选位于 Pull Request 列表边框内的顶部工具栏，标签“状态”后常驻显示四个带图标的圆角单选标签，与上方任务导航复用 shadcn Tabs 组件及默认样式，不单独覆盖颜色或圆角。Open、Closed、Merged 分别使用 PR、关闭 PR、合并图标，All 使用列表图标；支持方向键移动焦点和 Enter / Space 选择。窄窗口允许工具栏换行，四个状态仍全部可见。
+- 状态筛选文案随应用语言切换：中文显示“已开启 / 已关闭 / 已合并 / 全部”，英文显示“Open / Closed / Merged / All”；前三项与行内状态标签保持一致，空结果提示也使用当前语言的状态名称。
+- 状态筛选只影响当前概览的可见条目，不修改 Pull Request、Review 或 Snapshot，也不因切换筛选发起网络请求。当前概览内切换标签、刷新列表及刷新失败都保留所选状态；该选择不跨概览持久化。
+- 当前状态无匹配条目时，显示包含所选状态的空结果提示和切换说明，筛选控件始终保留；整个列表为空时继续区分未连接、无 Pull Request 与请求失败，局部失败提示不因筛选而隐藏。
 - 多个 GitHub repository 的 Pull Requests 使用一个按 GitHub 最近更新时间降序排列的扁平列表，不按 Git remote 或 GitHub repository 分组。只有发现多个不同 GitHub repository identity 时，每行才以弱化标签显示 `owner/repository`；`origin`、`upstream` 等 remote 名称仅用于诊断，不进入正常界面。
 - Pull Request 行在标题中显示一次 `#编号`，右侧操作只显示“开始审核”或“继续审核”；整行不作为点击目标。列表显示 Pull Request 相对更新时间。
+- Pull Request 行内的生命周期状态使用现有 Badge 胶囊标签：Open 为绿色、Closed 为红色、Merged 为紫色，配合对应的 PR、关闭 PR、合并图标及中英文状态文案；浅色与深色主题均采用状态色的淡底和清晰文字。草稿标记独立保留，状态筛选按钮仍使用 Tabs 的默认样式。
 - Pull Request 标签先展示本地持久化的 Pull Request Review 元数据，再后台发现 GitHub Pull Request。尚未创建 Review 的 Pull Request 不做离线列表缓存。
 - GitHub 不可用时，已保存的 Pull Request Review 仍留在 Pull Requests 标签中，并以低干扰提示说明元数据可能不是最新。
 - Pull Request 空状态区分未连接 GitHub、确实没有 Pull Request 和 GitHub 请求失败；连接 GitHub 必须由用户主动触发。
@@ -230,6 +236,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - React 测试覆盖侧边栏最近 5 条、展开到最近 10 条、Repository 最近 10 条、查看全部、收起、主视图导航、Tabs、Sheet、Dialog、Toast、Skeleton 和空状态。
 - 主视图导航测试验证三个主视图共用常驻侧边栏，品牌区、Repository 和 Review 可切换对应内容，仓库树中只有当前项高亮且“最近审核”永不高亮，打开 Review 后所属 Repository 展开、选中项可见且 Review 按更新后的最近打开时间排序。同时覆盖异步加载、打开失败保留原视图、重复点击不重载，以及小窗口切换后临时侧栏保持打开。测试不断言 `AppShell`、`MainSidebar` 或主视图状态的内部组件结构。
 - React 测试覆盖 Pull Request 离线缓存、局部 GitHub 失败、不可用 Repository、Review 切换失败保留当前内容，以及不同错误作用域。
+- Pull Request 筛选测试覆盖默认 Open、Draft、Closed/Merged 分离、All、在线状态覆盖已保存元数据、空结果切换、刷新保留筛选与筛选无副作用；浏览器验收覆盖宽窄窗口、长短标题、筛选弹层与键盘操作。
 - React 测试覆盖文件树自动选择、零变更、特殊 File Change、单栏与双栏切换、响应式降级和前端偏好恢复。
 - React 测试覆盖 Reader 内 Monaco 字号快捷键、Command Palette pane 选择、字号缩放恢复，以及 Reader 外 WebView 页面缩放分流。
 - i18n 单元测试覆盖 locale 规范化、显式偏好优先级、未知语言回退、namespace loader 白名单、绝对时间和相对时间格式。
