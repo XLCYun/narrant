@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { RepositoryOverview } from "@/components/repository-overview";
+import { Button } from "@/components/ui/button";
 import type { DiscoveredPullRequest, PullRequestMetadata, RepositoryReviewSummary } from "@/lib/review-types";
 
 /** 用代表性生命周期与标题长度覆盖筛选、离线和重试场景。 */
-type PreviewMode = "mixed" | "closed-only" | "offline" | "retry" | "loading";
+type PreviewMode = "mixed" | "closed-only" | "offline" | "retry" | "loading" | "empty" | "failed" | "first-load";
 
 /** 构造与生产 discovery 相同形状的预览条目。 */
 function previewPullRequest(number: number, title: string, state: PullRequestMetadata["state"], isDraft = false): DiscoveredPullRequest {
@@ -40,15 +42,20 @@ const savedReviews = [
   previewReview(closedPullRequest, "closed"), previewReview(mergedPullRequest, "merged"),
 ];
 
-/** 通过真实概览组件验收筛选，重试会模拟在线状态从 Open 更新为 Merged。 */
+/** 用可手动完成的请求验收刷新、失败恢复和筛选保留，不访问真实业务数据。 */
 export function PullRequestsPreview({ mode = "mixed" }: { mode?: PreviewMode }) {
+  const { i18n } = useTranslation();
   const [refreshed, setRefreshed] = useState(false);
   const [opened, setOpened] = useState<string>();
+  const [loading, setLoading] = useState(mode === "loading" || mode === "first-load");
+  const [requestCount, setRequestCount] = useState(0);
+  const [error, setError] = useState<string | undefined>(mode === "offline" ? "当前离线" : mode === "failed" ? "GitHub 暂时无法连接" : undefined);
+  const initiallyEmpty = ["empty", "failed", "first-load"].includes(mode) && !refreshed;
   const pullRequests = mode === "closed-only" ? [closedPullRequest] : [
     { ...openPullRequest, state: refreshed ? "merged" : "open" }, draftPullRequest, closedPullRequest, mergedPullRequest,
   ];
-  const reviews = mode === "offline" ? savedReviews : mode === "closed-only" ? [savedReviews[2]] : [savedReviews[0]];
-  const groups = mode === "offline" ? [] : [{
+  const reviews = initiallyEmpty ? [] : mode === "offline" ? savedReviews : mode === "closed-only" ? [savedReviews[2]] : [savedReviews[0]];
+  const groups = initiallyEmpty || (mode === "offline" && !refreshed) ? [] : [{
     repository: { owner: "example", name: "narrant" }, remoteNames: ["origin"], pullRequests, error: null,
   }];
   return <>
@@ -59,15 +66,27 @@ export function PullRequestsPreview({ mode = "mixed" }: { mode?: PreviewMode }) 
       pullRequestGroups={mode === "retry" && !refreshed ? [...groups, {
         repository: { owner: "example", name: "upstream" }, remoteNames: ["upstream"], pullRequests: [], error: "GitHub 暂时无法连接",
       }] : groups}
-      discoveryLoading={mode === "loading"}
-      discoveryError={mode === "offline" ? "当前离线" : undefined}
+      discoveryLoading={loading}
+      discoveryError={error}
       githubConnected={mode !== "offline"}
       localBranches={<p>本地分支预览</p>}
-      onRetryDiscovery={() => setRefreshed(true)}
+      onRetryDiscovery={() => {
+        setRequestCount((count) => count + 1);
+        setLoading(true);
+        setError(undefined);
+      }}
       onConnectGitHub={() => setOpened("连接 GitHub")}
       onOpenReview={(review) => setOpened(`继续审核 ${review.reviewId}`)}
       onOpenPullRequest={(_, pullRequest) => setOpened(`开始审核 #${pullRequest.number}`)}
     />
+    <div className="mt-6 flex flex-wrap items-center gap-3 border-t pt-4" aria-label="预览请求控制">
+      <span className="text-sm text-muted-foreground">手动请求次数：{requestCount}</span>
+      <Button variant="outline" size="sm" onClick={() => void i18n.changeLanguage(i18n.resolvedLanguage === "en" ? "zh-CN" : "en")}>中文 / English</Button>
+      {loading && <>
+        <Button variant="outline" size="sm" onClick={() => { setRefreshed(true); setError(undefined); setLoading(false); }}>模拟刷新成功</Button>
+        <Button variant="outline" size="sm" onClick={() => { setError("GitHub 暂时无法连接"); setLoading(false); }}>模拟刷新失败</Button>
+      </>}
+    </div>
     {opened && <p className="mt-4 text-sm text-muted-foreground" role="status">预览动作：{opened}</p>}
   </>;
 }

@@ -105,6 +105,58 @@ function savedPullRequest(value: typeof pullRequest): RepositoryReviewSummary {
 }
 
 describe("RepositoryOverview", () => {
+  it.each([
+    { groups: [{ repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null }] },
+    {},
+    { discoveryError: "network unavailable" },
+    { connected: false, discoveryError: "anonymous discovery unavailable" },
+  ])("列表、空状态与失败状态都可手动刷新 %#", (options) => {
+    const actions = renderOverview(options);
+    const refresh = screen.getByRole("button", { name: "刷新列表" });
+    expect(refresh).toBeVisible();
+    expect(refresh).toBeEnabled();
+    fireEvent.click(refresh);
+    expect(actions.onRetryDiscovery).toHaveBeenCalledOnce();
+    expect(actions.onOpenReview).not.toHaveBeenCalled();
+    expect(actions.onOpenPullRequest).not.toHaveBeenCalled();
+    expect(actions.onConnectGitHub).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("加载期间禁用所有 discovery 入口且保留列表：已有内容 %s", (hasRows) => {
+    const { onRetryDiscovery } = renderOverview({
+      loading: true,
+      groups: [
+        { repository, remoteNames: ["origin"], pullRequests: hasRows ? [pullRequest] : [], error: null },
+        { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" },
+      ],
+    });
+    const refresh = screen.getByRole("button", { name: "正在刷新列表" });
+    expect(refresh).toBeDisabled();
+    expect(refresh).toHaveAttribute("aria-busy", "true");
+    expect(refresh.querySelector(".animate-spin")).toHaveAttribute("aria-hidden", "true");
+    const retry = screen.getByRole("button", { name: "重新尝试" });
+    expect(retry).toBeDisabled();
+    fireEvent.click(refresh);
+    fireEvent.click(retry);
+    expect(onRetryDiscovery).not.toHaveBeenCalled();
+    if (hasRows) expect(screen.getByText("#40 Repository overview")).toBeVisible();
+  });
+
+  it("阻断错误的重试入口在请求期间禁用", () => {
+    const { onRetryDiscovery } = renderOverview({ loading: true, discoveryError: "request failed" });
+    const retry = screen.getByRole("button", { name: "重新尝试" });
+    expect(retry).toBeDisabled();
+    fireEvent.click(retry);
+    expect(onRetryDiscovery).not.toHaveBeenCalled();
+  });
+
+  it("单仓库刷新失败后保留条目并显示错误与过期提示", () => {
+    renderOverview({ groups: [{ repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: "request failed" }] });
+    expect(screen.getByText("#40 Repository overview")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("request failed；在线元数据可能不是最新。");
+    expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled();
+  });
+
   it("默认显示 Pull Requests，并提供三个任务标签", () => {
     renderOverview();
     expect(screen.getByRole("tab", { name: "Pull Requests" })).toHaveAttribute("aria-selected", "true");
@@ -349,17 +401,22 @@ describe("RepositoryOverview", () => {
   it("未连接且匿名 discovery 失败时仍优先提供连接 GitHub", () => {
     renderOverview({ connected: false, discoveryError: "private repository" });
     expect(screen.getByRole("button", { name: "连接 GitHub" })).toBeVisible();
+    expect(screen.getByText("private repository")).toBeVisible();
+    expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "重新尝试" })).not.toBeInTheDocument();
   });
 
   it("英文 locale 同时翻译标签、状态、恢复动作和 ARIA label", async () => {
     await i18n.changeLanguage("en");
-    renderOverview({ discoveryError: "network unavailable", connected: true });
+    const { rerender } = renderOverview({ discoveryError: "network unavailable", connected: true });
 
     expect(screen.getByRole("tab", { name: "Local branches" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Review history" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
     expect(screen.getByLabelText("Repository tasks")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refresh list" })).toBeEnabled();
+    rerender({ discoveryLoading: true });
+    expect(screen.getByRole("button", { name: "Refreshing list" })).toBeDisabled();
   });
 
   it("英文 locale 翻译筛选入口与空结果说明", async () => {

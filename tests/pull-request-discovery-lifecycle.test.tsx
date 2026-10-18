@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PullRequestDiscoveryApplicationAdapter } from "@/github/pull-request-discovery-application";
 import { usePullRequestDiscoveryLifecycle } from "@/github/use-pull-request-discovery-lifecycle";
@@ -31,6 +31,61 @@ const otherGroups: PullRequestGroup[] = [{
 }];
 
 describe("Pull Request Discovery lifecycle", () => {
+  it("首次加载和手动刷新均忽略重复触发，失败后可重试当前 Repository", async () => {
+    const initial = deferred<PullRequestGroup[]>();
+    const refreshing = deferred<PullRequestGroup[]>();
+    const discover = vi.fn().mockReturnValueOnce(initial.promise).mockReturnValueOnce(refreshing.promise).mockResolvedValue(otherGroups);
+    const adapter = { discover };
+    const { result } = renderHook(() => usePullRequestDiscoveryLifecycle(adapter, {
+      enabled: true, repositoryId: 17, signedIn: false,
+    }));
+    await act(async () => { await result.current.retry(); });
+    expect(discover).toHaveBeenCalledTimes(1);
+    await act(async () => initial.resolve(publicGroups));
+
+    let refresh!: Promise<void>;
+    act(() => {
+      refresh = result.current.retry();
+      void result.current.retry();
+    });
+    expect(discover).toHaveBeenCalledTimes(2);
+    expect(result.current.transition.kind).toBe("refreshing");
+    expect(result.current.groups).toEqual(publicGroups);
+    await act(async () => { refreshing.reject(new Error("offline")); await refresh; });
+    expect(result.current.groups).toEqual(publicGroups);
+    expect(result.current.error?.detail).toContain("offline");
+    await act(async () => { await result.current.retry(); });
+    expect(discover.mock.calls).toEqual([[17], [17], [17]]);
+    expect(result.current.groups).toEqual(otherGroups);
+    expect(result.current.error).toBeUndefined();
+    expect(result.current.transition.kind).toBe("stable");
+  });
+
+  it("逐仓库更新成功结果、保留失败条目，成功空结果和移除的来源不保留旧条目", async () => {
+    const pullRequest = {
+      number: 1, title: "Available before refresh", description: "", authorUsername: "octocat",
+      state: "open", isDraft: false, webUrl: "https://github.com/octo-org/public-repo/pull/1",
+      githubUpdatedAt: "2026-10-18T08:00:00Z", base: { ref: "main", sha: "base" }, head: { ref: "topic", sha: "head" },
+    };
+    const cached = { ...publicGroups[0], pullRequests: [pullRequest] };
+    const removed = { ...otherGroups[0], repository: { owner: "removed", name: "remote" }, pullRequests: [pullRequest] };
+    const failed = { ...publicGroups[0], repository: { owner: "OCTO-ORG", name: "PUBLIC-REPO" }, error: "rate limited" };
+    const updated = { ...otherGroups[0], pullRequests: [{ ...pullRequest, title: "Latest result" }] };
+    const discover = vi.fn()
+      .mockResolvedValueOnce([cached, otherGroups[0], removed])
+      .mockResolvedValueOnce([failed, updated])
+      .mockResolvedValueOnce(publicGroups);
+    const adapter = { discover };
+    const { result } = renderHook(() => usePullRequestDiscoveryLifecycle(adapter, {
+      enabled: true, repositoryId: 17, signedIn: true,
+    }));
+    await waitFor(() => expect(result.current.transition.kind).toBe("stable"));
+    await act(async () => { await result.current.retry(); });
+    expect(result.current.groups).toEqual([{ ...failed, pullRequests: [pullRequest] }, updated]);
+    await act(async () => { await result.current.retry(); });
+    expect(result.current.groups).toEqual(publicGroups);
+  });
+
   it("GitHub Identity 变化时保留现有 discovery，刷新失败只产生局部错误", async () => {
     const requests: Array<ReturnType<typeof deferred<PullRequestGroup[]>>> = [];
     const adapter: PullRequestDiscoveryApplicationAdapter = {

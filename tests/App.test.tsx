@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 vi.mock("@monaco-editor/react", () => ({
   loader: { config: () => undefined, init: () => Promise.resolve({}) },
@@ -23,7 +23,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
 
 import { App } from "@/App";
 import { i18n } from "@/lib/i18n";
-import type { PullRequestMetadata, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
+import type { PullRequestGroup, PullRequestMetadata, RecentReviewSummary, RepositoryReviewSummary } from "@/lib/review-types";
 
 /** 用紧凑输入构造 Repository 范围内的 Review 测试投影。 */
 function repositoryReview(input: {
@@ -395,6 +395,80 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开仓库 two" }));
     await screen.findByRole("heading", { name: "two" });
     expect(screen.getByRole("tab", { name: "已开启", selected: true })).toBeVisible();
+  });
+
+  it("手动刷新只更新当前 Repository 的 Discovery，失败保留列表且不改变已打开 Snapshot", async () => {
+    mockSystemTheme(false);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const entry = {
+      id: 25, canonicalPath: "/work/narrant", gitCommonDirectory: "/work/narrant/.git",
+      createdAtMillis: 1, lastOpenedAtMillis: 1, availability: { kind: "available" },
+    };
+    const metadata: PullRequestMetadata = {
+      owner: "octo-org", repository: "octo-repo", number: 42, title: "Original title", description: "", authorUsername: "octocat",
+      state: "open", isDraft: false, webUrl: "https://github.com/octo-org/octo-repo/pull/42",
+      baseRef: "main", headRef: "feature", synchronizedAtMillis: 1,
+    };
+    const review = repositoryReview({ reviewId: "review-42", baseRef: "main", headRef: "feature", headRevision: "head-1", lastOpenedAt: 1, pullRequest: metadata });
+    const group: PullRequestGroup = {
+      repository: { owner: metadata.owner, name: metadata.repository }, remoteNames: ["origin"], error: null,
+      pullRequests: [{ ...metadata, githubUpdatedAt: "2026-10-18T08:00:00Z", base: { ref: "main", sha: "base" }, head: { ref: "feature", sha: "head-1" } }],
+    };
+    const requests: Array<{ resolve: (groups: PullRequestGroup[]) => void; reject: (reason: Error) => void }> = [];
+    let manualRefresh = false;
+    invoke.mockImplementation((command: string) => {
+      if (command === "load_repository_navigation") return Promise.resolve({ repositories: [entry], recentReviews: [] });
+      if (command === "open_repository_overview") return Promise.resolve({ kind: "ready", overview: { repository: entry, reviews: [review] } });
+      if (command === "load_repository_reviews") return Promise.resolve({ reviews: [review] });
+      if (command === "github_auth_status") return Promise.resolve({ configured: true, signedIn: false });
+      if (command === "discover_github_pull_requests") return manualRefresh
+        ? new Promise<PullRequestGroup[]>((resolve, reject) => requests.push({ resolve, reject }))
+        : Promise.resolve([group]);
+      if (command === "reopen_review") return Promise.resolve({
+        reviewId: review.reviewId, snapshotId: "snapshot-original", baseRef: "main", headRef: "feature",
+        ...review.currentSnapshot, fileChanges: [], pullRequest: metadata,
+      });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "/work/narrant" }));
+    fireEvent.click(await screen.findByRole("button", { name: /继续审核 #42/ }));
+    await openOverview();
+    expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent("head-1");
+    fireEvent.click(screen.getByRole("button", { name: "退出审核" }));
+    await screen.findByRole("tab", { name: "审核历史", selected: true });
+    fireEvent.click(screen.getByRole("tab", { name: "Pull Requests" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("tab", { name: "全部", exact: true }));
+    const allPullRequests = within(screen.getByRole("tabpanel", { name: "全部" }));
+    manualRefresh = true;
+    invoke.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新列表" }));
+    const refreshing = screen.getByRole("button", { name: "正在刷新列表" });
+    expect(refreshing).toBeDisabled();
+    expect(allPullRequests.getByText("#42 Original title")).toBeVisible();
+    fireEvent.click(refreshing);
+    expect(requests).toHaveLength(1);
+    await act(async () => requests[0].reject(new Error("network unavailable")));
+    expect(allPullRequests.getByText("#42 Original title")).toBeVisible();
+    expect(screen.getByText(/network unavailable.*在线元数据可能不是最新/)).toBeVisible();
+    expect(screen.getByRole("tab", { name: "全部", selected: true })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新列表" }));
+    await act(async () => requests[1].resolve([{ ...group, pullRequests: [{
+      ...group.pullRequests[0], title: "Latest title", state: "merged", head: { ref: "feature", sha: "head-2" },
+    }] }]));
+    expect(allPullRequests.getByText("#42 Latest title")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "全部", selected: true })).toBeVisible();
+    expect(invoke.mock.calls).toEqual([
+      ["discover_github_pull_requests", { repositoryId: 25 }],
+      ["discover_github_pull_requests", { repositoryId: 25 }],
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: /继续审核 #42/ }));
+    await openOverview();
+    expect(screen.getByRole("tabpanel", { name: "审核概览" })).toHaveTextContent("head-1");
+    expect(screen.getByRole("tabpanel", { name: "审核概览" })).not.toHaveTextContent("head-2");
   });
 
   it("选择发现的 Pull Request 会通过 durable reviewId 打开本地 Review", async () => {

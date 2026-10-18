@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { AlertCircleIcon, GitBranchIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestIcon, HistoryIcon, InformationCircleIcon, ListViewIcon } from "@hugeicons/core-free-icons";
+import { AlertCircleIcon, GitBranchIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestIcon, HistoryIcon, InformationCircleIcon, ListViewIcon, Refresh01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -158,7 +158,7 @@ export function RepositoryOverview(props: Props) {
         </Tooltip>
       </header>
       <Tabs key={props.initialTab} defaultValue={props.initialTab ?? "pull-requests"}>
-        <TabsList aria-label={t("repository:tasks")}>
+        <TabsList aria-label={t("repository:tasks")} className="max-w-full flex-wrap group-data-horizontal/tabs:h-auto">
           <TabsTrigger value="pull-requests">
             {props.discoveryLoading ? <Spinner aria-hidden /> : <Icon icon={GitPullRequestIcon} />}
             {t("repository:tabs.pullRequests")}
@@ -179,6 +179,18 @@ export function RepositoryOverview(props: Props) {
                   {t(`repository:pullRequestFilter.${value}`)}
                 </TabsTrigger>)}
               </TabsList>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="ml-auto"
+                disabled={props.discoveryLoading}
+                aria-busy={props.discoveryLoading || undefined}
+                onClick={props.onRetryDiscovery}
+              >
+                {props.discoveryLoading ? <Spinner aria-hidden /> : <Icon icon={Refresh01Icon} aria-hidden />}
+                {t(props.discoveryLoading ? "repository:refreshingPullRequests" : "repository:refreshPullRequests")}
+              </Button>
             </div>
             <TabsContent value={stateFilter}>
               {hasPartialFailure && <div className="m-4 flex items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
@@ -189,10 +201,12 @@ export function RepositoryOverview(props: Props) {
                     return <p key={identity}>{t("repository:partialFailure", { repository: identity, error: group.error })}</p>;
                   })}
                 </div>
-                <Button size="sm" variant="outline" onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>
+                <Button size="sm" variant="outline" disabled={props.discoveryLoading} aria-busy={props.discoveryLoading || undefined} onClick={props.onRetryDiscovery}>
+                  {props.discoveryLoading && <Spinner aria-hidden />}{t("repository:retry")}
+                </Button>
               </div>}
-              {props.discoveryError && rows.length > 0 && <div className="m-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-                {props.discoveryError}；{t("repository:stale")}
+              {blockingDiscoveryError && rows.length > 0 && <div className="m-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
+                {blockingDiscoveryError}；{t("repository:stale")}
               </div>}
               {visibleRows.length > 0 && <ul className="divide-y">
                 {visibleRows.map((row) => {
@@ -239,9 +253,9 @@ export function RepositoryOverview(props: Props) {
                 description={t("repository:pullRequestFilter.emptyDescription")}
               />}
               {rows.length === 0 && (!props.githubConnected
-                ? <PullRequestStatus icon={GitPullRequestIcon} title={t("repository:connectForPrivate")} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
+                ? <PullRequestStatus icon={GitPullRequestIcon} title={t("repository:connectForPrivate")} description={blockingDiscoveryError} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
                 : blockingDiscoveryError
-                  ? <PullRequestStatus icon={AlertCircleIcon} title={t("repository:loadFailed")} description={blockingDiscoveryError} action={<Button variant="outline" onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>} />
+                  ? <PullRequestStatus icon={AlertCircleIcon} title={t("repository:loadFailed")} description={blockingDiscoveryError} action={<Button variant="outline" disabled={props.discoveryLoading} aria-busy={props.discoveryLoading || undefined} onClick={props.onRetryDiscovery}>{props.discoveryLoading && <Spinner aria-hidden />}{t("repository:retry")}</Button>} />
                   : <PullRequestStatus icon={InformationCircleIcon} title={t("repository:noPullRequests")} description={t("repository:noPullRequestsDescription")} />)}
             </TabsContent>
           </Tabs>
