@@ -1,5 +1,30 @@
 use super::*;
 
+/// 已取消的分析不得启动 worktree 创建，也不能留下未注册的目录。
+#[test]
+fn cancelled_before_creation_does_not_touch_workspace() {
+    let repository = committed_repository();
+    let managed = tempfile::tempdir().unwrap();
+    let workspace = managed.path().join("review/before");
+    let head = read_git(repository.path(), ["rev-parse", "HEAD"]);
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    let error = GitProcessAdapter::new(repository.path())
+        .create_detached_worktree(
+            &workspace,
+            &head,
+            &cancellation,
+            OperationContext::background().cancellation(),
+        )
+        .unwrap_err();
+
+    assert!(error.is_cancelled(), "{error}");
+    assert!(!workspace.parent().unwrap().exists(), "{error}");
+    let worktrees = read_git(repository.path(), ["worktree", "list", "--porcelain"]);
+    assert_eq!(worktrees.matches("worktree ").count(), 1, "{worktrees}");
+}
+
 /// 在独立临时目录中创建真实 linked worktree，保留仓库直至校验结束。
 struct WorkspaceFixture {
     repository: tempfile::TempDir,

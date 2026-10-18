@@ -809,13 +809,16 @@ const previews: Record<string, PreviewDefinition> = {
     },
   },
   "pull-requests": {
-    label: "Pull Requests 状态筛选",
+    label: "Pull Requests 筛选与刷新",
     scenarios: {
       default: { label: "四种状态与长短标题", render: () => <PullRequestsPreview /> },
       "closed-only": { label: "Open 筛选空结果", render: () => <PullRequestsPreview mode="closed-only" /> },
       offline: { label: "离线已保存 Review", render: () => <PullRequestsPreview mode="offline" /> },
       retry: { label: "重试后更新在线状态", render: () => <PullRequestsPreview mode="retry" /> },
       loading: { label: "后台刷新保留筛选", render: () => <PullRequestsPreview mode="loading" /> },
+      empty: { label: "空列表刷新", render: () => <PullRequestsPreview mode="empty" /> },
+      failed: { label: "首次失败后重试", render: () => <PullRequestsPreview mode="failed" /> },
+      "first-load": { label: "首次加载禁用刷新", render: () => <PullRequestsPreview mode="first-load" /> },
     },
   },
   "review-reader": {

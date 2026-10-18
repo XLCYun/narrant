@@ -31,6 +31,9 @@ impl GitProcessAdapter {
         cancellation: &CancellationToken,
         convergence_cancellation: &CancellationToken,
     ) -> Result<(), GitCommandError> {
+        if cancellation.is_cancelled() {
+            return Err(GitCommandError::cancelled());
+        }
         if workspace_path.exists() {
             let actual_head = read_head_object_id(workspace_path, cancellation)?;
             if actual_head == head_object_id {
@@ -46,17 +49,31 @@ impl GitProcessAdapter {
         std::fs::create_dir_all(parent).map_err(|error| {
             GitCommandError::new(format!("无法创建 Review Workspace 目录：{error}"))
         })?;
-        let creation = self.run_workspace_mutation(
+        // 先完成短暂的注册，再执行可取消的签出，避免中断留下未注册目录或半写入的 .git。
+        let registration = self.run_workspace_mutation(
             [
                 OsStr::new("worktree"),
                 OsStr::new("add"),
                 OsStr::new("--detach"),
+                OsStr::new("--no-checkout"),
                 OsStr::new("--"),
                 workspace_path.as_os_str(),
                 OsStr::new(head_object_id),
             ],
-            cancellation,
+            convergence_cancellation,
         );
+        let creation = registration.and_then(|_| {
+            if cancellation.is_cancelled() {
+                return Err(GitCommandError::cancelled());
+            }
+            // 正常 checkout 继续执行项目 hooks、filters 和 LFS 行为。
+            Self::new(workspace_path)
+                .run_workspace_mutation(
+                    ["checkout", "--detach", "--force", head_object_id, "--"],
+                    cancellation,
+                )
+                .map(|_| ())
+        });
         if let Err(error) = creation {
             let error = error.with_context(
                 "无法创建 Review Workspace。请确认磁盘空间和仓库 worktree 状态后重试",
