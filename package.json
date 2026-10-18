@@ -15,7 +15,7 @@
     "predev": "pnpm generate:file-icons",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "predev:preview": "pnpm generate:file-icons",
-    "dev:preview": "vite --host 127.0.0.1 --port 1421 --open /preview.html",
+    "dev:preview": "vite --host 127.0.0.1 --port 1421",
     "prebuild": "pnpm generate:file-icons",
     "build": "tsc --noEmit && cross-env NODE_OPTIONS=--max-old-space-size=4096 vite build",
     "build:macos": "pnpm tauri build --bundles dmg",
