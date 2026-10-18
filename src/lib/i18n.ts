@@ -73,8 +73,8 @@ export const resources = {
       refreshing: "正在后台刷新 Pull Requests。", stale: "在线元数据可能不是最新。", updateAvailable: "有更新",
       draft: "草稿", noPullRequests: "没有可审核的 Pull Request", noPullRequestsDescription: "当前 GitHub 仓库暂时没有可审核的 Pull Request。",
       pullRequestFilter: {
-        label: "状态", accessibleLabel: "Pull Request 状态", open: "Open", closed: "Closed", merged: "Merged", all: "All",
-        empty: "没有 {{state}} 状态的 Pull Request", emptyDescription: "可以切换状态查看其他 Pull Request。",
+        label: "状态", accessibleLabel: "Pull Request 状态", open: "已开启", closed: "已关闭", merged: "已合并", all: "全部",
+        empty: "没有{{state}}的 Pull Request", emptyDescription: "可以切换状态查看其他 Pull Request。",
       },
       connectForPrivate: "连接 GitHub 以访问授权范围内的 Pull Request",
       loadFailed: "无法加载 Pull Requests", partialFailure: "{{repository}} 暂时无法加载：{{error}}",

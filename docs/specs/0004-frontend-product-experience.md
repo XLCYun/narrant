@@ -148,6 +148,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - Pull Request 列表把未创建 Review 与已有 Review 分别标记为“开始审核”和“继续审核”。相同 Pull Request Selection 继续复用已有 Review。
 - 每次进入一个 Repository 概览时，Pull Requests 状态筛选默认选择 `Open`，可切换 `Open`、`Closed`、`Merged` 和 `All`；`Closed` 只包含关闭但未合并的条目，未关闭的 Draft 归入 `Open`。筛选在合并已保存 Review 与在线发现条目后统一执行，在线元数据可用时以在线状态为准。
 - 状态筛选位于 Pull Request 列表边框内的顶部工具栏，标签“状态”后常驻显示四个带图标的圆角单选标签，与上方任务导航复用 shadcn Tabs 组件及默认样式，不单独覆盖颜色或圆角。Open、Closed、Merged 分别使用 PR、关闭 PR、合并图标，All 使用列表图标；支持方向键移动焦点和 Enter / Space 选择。窄窗口允许工具栏换行，四个状态仍全部可见。
+- 状态筛选文案随应用语言切换：中文显示“已开启 / 已关闭 / 已合并 / 全部”，英文显示“Open / Closed / Merged / All”；前三项与行内状态标签保持一致，空结果提示也使用当前语言的状态名称。
 - 状态筛选只影响当前概览的可见条目，不修改 Pull Request、Review 或 Snapshot，也不因切换筛选发起网络请求。当前概览内切换标签、刷新列表及刷新失败都保留所选状态；该选择不跨概览持久化。
 - 当前状态无匹配条目时，显示包含所选状态的空结果提示和切换说明，筛选控件始终保留；整个列表为空时继续区分未连接、无 Pull Request 与请求失败，局部失败提示不因筛选而隐藏。
 - 多个 GitHub repository 的 Pull Requests 使用一个按 GitHub 最近更新时间降序排列的扁平列表，不按 Git remote 或 GitHub repository 分组。只有发现多个不同 GitHub repository identity 时，每行才以弱化标签显示 `owner/repository`；`origin`、`upstream` 等 remote 名称仅用于诊断，不进入正常界面。

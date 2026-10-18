@@ -85,7 +85,7 @@ function renderOverview(options: {
 }
 
 /** 通过可见的状态标签切换筛选，覆盖与用户相同的交互入口。 */
-async function selectState(name: "Open" | "Closed" | "Merged" | "All", label = "Pull Request 状态") {
+async function selectState(name: string, label = "Pull Request 状态") {
   const filters = screen.getByRole("tablist", { name: label });
   fireEvent.click(within(filters).getByRole("tab", { name, exact: true }));
 }
@@ -111,8 +111,8 @@ describe("RepositoryOverview", () => {
     expect(screen.getByRole("tab", { name: "本地分支" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "审核历史" })).toBeInTheDocument();
     const filters = screen.getByRole("tablist", { name: "Pull Request 状态" });
-    expect(within(filters).getAllByRole("tab")).toHaveLength(4);
-    expect(within(filters).getByRole("tab", { selected: true })).toHaveTextContent("Open");
+    expect(within(filters).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["已开启", "已关闭", "已合并", "全部"]);
+    expect(within(filters).getByRole("tab", { selected: true })).toHaveTextContent("已开启");
   });
 
   it.each(["online", "saved"])("%s 条目统一按四种状态筛选，Draft 仅在未关闭时归入 Open", async (source) => {
@@ -130,15 +130,15 @@ describe("RepositoryOverview", () => {
     expect(screen.getByText("#41 Draft change")).toBeVisible();
     expect(screen.queryByText("#42 Closed change")).not.toBeInTheDocument();
 
-    await selectState("Closed");
+    await selectState("已关闭");
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
     expect(screen.getByText("#42 Closed change")).toBeVisible();
-    await selectState("Merged");
+    await selectState("已合并");
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
     expect(screen.getByText("#43 Merged change")).toBeVisible();
-    await selectState("All");
+    await selectState("全部");
     expect(screen.getAllByRole("listitem")).toHaveLength(4);
-    await selectState("Open");
+    await selectState("已开启");
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(JSON.stringify({ reviews, groups })).toBe(before);
     expect(actions.onOpenReview).not.toHaveBeenCalled();
@@ -152,11 +152,11 @@ describe("RepositoryOverview", () => {
       reviews: [saved],
       groups: [{ repository, remoteNames: ["origin"], pullRequests: [{ ...pullRequest, state: "merged" }], error: null }],
     });
-    expect(screen.getByText("没有 Open 状态的 Pull Request")).toBeVisible();
+    expect(screen.getByText("没有已开启的 Pull Request")).toBeVisible();
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
-    await selectState("Closed");
-    expect(screen.getByText("没有 Closed 状态的 Pull Request")).toBeVisible();
-    await selectState("Merged");
+    await selectState("已关闭");
+    expect(screen.getByText("没有已关闭的 Pull Request")).toBeVisible();
+    await selectState("已合并");
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
     expect(screen.getByText("#40 Repository overview")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /继续审核/ }));
@@ -167,11 +167,11 @@ describe("RepositoryOverview", () => {
   it("筛选空结果保留离线提示和状态入口，切换 All 后可继续已有 Review", async () => {
     const closed = savedPullRequest({ ...pullRequest, state: "closed" });
     renderOverview({ reviews: [closed], connected: false, discoveryError: "offline" });
-    expect(screen.getByText("没有 Open 状态的 Pull Request")).toBeVisible();
+    expect(screen.getByText("没有已开启的 Pull Request")).toBeVisible();
     expect(screen.getByText("可以切换状态查看其他 Pull Request。")).toBeVisible();
     expect(screen.getByText(/在线元数据可能不是最新/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "连接 GitHub" })).not.toBeInTheDocument();
-    await selectState("All");
+    await selectState("全部");
     expect(screen.getByRole("button", { name: /继续审核/ })).toBeVisible();
   });
 
@@ -179,20 +179,20 @@ describe("RepositoryOverview", () => {
     const group = { repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null };
     const failedGroup = { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" };
     const { rerender, onRetryDiscovery } = renderOverview({ reviews: [saved], groups: [group, failedGroup] });
-    await selectState("Merged");
-    expect(screen.getByText("没有 Merged 状态的 Pull Request")).toBeVisible();
+    await selectState("已合并");
+    expect(screen.getByText("没有已合并的 Pull Request")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "重新尝试" }));
     expect(onRetryDiscovery).toHaveBeenCalledOnce();
     rerender({ pullRequestGroups: [group, failedGroup], discoveryLoading: true });
-    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "已合并", selected: true })).toBeVisible();
     rerender({ pullRequestGroups: [group], discoveryError: "offline" });
-    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "已合并", selected: true })).toBeVisible();
     rerender({ pullRequestGroups: [{ ...group, pullRequests: [{ ...pullRequest, state: "merged" }] }] });
-    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "已合并", selected: true })).toBeVisible();
     expect(screen.getByRole("button", { name: /继续审核/ })).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "本地分支" }));
     fireEvent.click(screen.getByRole("tab", { name: "Pull Requests" }));
-    expect(screen.getByRole("tab", { name: "Merged", selected: true })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "已合并", selected: true })).toBeVisible();
   });
 
   it("从审核历史整行继续 Review", () => {
@@ -365,6 +365,8 @@ describe("RepositoryOverview", () => {
   it("英文 locale 翻译筛选入口与空结果说明", async () => {
     await i18n.changeLanguage("en");
     renderOverview({ reviews: [saved] });
+    const filters = screen.getByRole("tablist", { name: "Pull Request status" });
+    expect(within(filters).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Open", "Closed", "Merged", "All"]);
     await selectState("Closed", "Pull Request status");
     expect(screen.getByText("No Closed Pull Requests")).toBeVisible();
     expect(screen.getByText("Choose another status to see other Pull Requests.")).toBeVisible();

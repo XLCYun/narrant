@@ -2,7 +2,18 @@
 
 final result: passed
 
-## 本轮：行内状态胶囊标签
+## 本轮：筛选栏中文文案
+
+- 补齐中文筛选词条：“已开启 / 已关闭 / 已合并 / 全部”，前三项与行内状态胶囊一致。英文保留“Open / Closed / Merged / All”。
+- 中文空结果提示改为“没有{{state}}的 Pull Request”，例如“没有已开启的 Pull Request”。
+- 应用内浏览器实际 900×720、390×844 检查通过；保留用户原有缩放，读取 innerWidth / innerHeight 核实 CSS 尺寸。窄窗口四个中文标签完整显示，筛选栏宽约 312–319px，页面无横向溢出。
+- “已开启 / 已关闭 / 已合并 / 全部”分别显示 2 / 1 / 1 / 4 条记录；浅色与深色空结果提示均使用中文，从空结果切换“已关闭”可恢复条目。长标题仍截断，草稿、状态胶囊与审核按钮完整可见。
+- 相关组件与 App 的 50 项现有测试通过，包括中文四态筛选、英文四个标签和空结果、切换仓库恢复默认状态；TypeScript 检查与 Lint 通过。
+- 浏览器控制台无 error/warn，已恢复默认 viewport。
+- 宽窗口截图：`/Users/lizhanfa/.codex/visualizations/2026/10/18/01a14ad4-b2f1-7180-bde1-50473bfcfa3a/issue-202-localized-filters-light.png`。
+- 窄窗口和深色空结果截图：同目录 `issue-202-localized-filters-narrow.png`、`issue-202-localized-filters-empty-dark.png`。
+
+## 前轮：行内状态胶囊标签
 
 - 用户标注的是 PR 行内作者旁边的 `open` 文本，要求更醒目的胶囊标签与不同状态颜色。
 - 复用现有 shadcn Badge 的尺寸与圆角；Open 使用绿色、Closed 使用红色、Merged 使用紫色，搭配状态图标、淡底色和细边框。筛选与行标签共用生命周期图标定义，筛选按钮继续使用默认 Tabs 样式。
