@@ -783,7 +783,8 @@ async fn analysis_failure_cleans_before_without_closing_review() {
             RustDependencyScope::default(),
         )
         .await;
-    assert_eq!(result.unwrap_err().code, "analysis-failed");
+    let error = result.unwrap_err();
+    assert_eq!(error.code, "analysis-failed", "{error:?}");
     assert!(fixture
         .lifecycle
         .workspace_path(
