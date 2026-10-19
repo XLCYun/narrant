@@ -99,6 +99,9 @@ CodeGraph checkout 作为只读协议及候选来源。遵守 Global Constraints
 1. 新建 `structure_review/codegraph_client`：单一 CLI 适配负责 exact 引擎/协议握手、请求、取消、
    有界 NDJSON、stderr 与进程树。返回图进入现有 code_graph 构造器，失败不能返回空图。
    测试覆盖伪 CLI 的错误/截断/身份不符/取消/后代清理及真实公共 CLI。
+   现有共享 `child_process` 需带回 CodeGraph 已验证的 Unix 后代快照与出生时间识别，
+   在外层 CLI 异常退出或强制终止时等待嵌套 worker/helper 回收，再释放工作区和语言包租约。
+   保留 Git 等原有调用者，并运行共享进程与工作区生命周期的聚焦回归。
 2. application 从已持有 lease 的语言包根启动 bin/codegraph，只传包 ID、根、源码选集和分析选项；
    不再装配语言 helper、平台目录或 SDK。保留两侧取消、Review Workspace 保护、图合并与 diff。
 3. 更新语言支持目录/下载源/必需文件为固定 CodeGraph 产物，保留完整性、版本隔离与租约。
