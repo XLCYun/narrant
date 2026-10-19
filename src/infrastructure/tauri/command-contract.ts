@@ -2,7 +2,7 @@ import type { StructureComparison } from "@/structure-review/types";
 import type { PackCollection, PackId } from "@/language-support/types";
 import type { GitHubIdentity } from "@/components/github-identity-entry";
 import type { DeviceAuthorization, GitHubAuthStatus } from "@/github/github-oauth-application";
-import type { PullRequestGroup } from "@/lib/review-types";
+import type { PullRequestDiscoveryQuery, PullRequestGroup } from "@/lib/review-types";
 import type { FileChangeContent, ReviewSnapshot } from "@/review/types";
 import type { BranchSelectionUpdate } from "@/review/review-application";
 import type { BabysitChangedRange, BabysitEligibility, BabysitError, BabysitFileExplanations, BabysitGenerationPolicy, BabysitProgress } from "@/babysit/types";
@@ -72,7 +72,7 @@ export type TauriCommandContract = {
   clear_babysit_snapshot_cache: { args: { reviewId: string; snapshotId: string }; result: void; error: BabysitError };
   clear_babysit_review_cache: { args: { reviewId: string }; result: void; error: BabysitError };
   close_review: { args: { reviewId: string }; result: void };
-  discover_github_pull_requests: { args: { repositoryId: number }; result: PullRequestGroup[] };
+  discover_github_pull_requests: { args: { repositoryId: number; query: PullRequestDiscoveryQuery }; result: PullRequestGroup[] };
   github_auth_status: { args: EmptyArgs; result: GitHubAuthStatus };
   refresh_github_identity: { args: EmptyArgs; result: GitHubIdentity };
   start_github_authorization: { args: EmptyArgs; result: DeviceAuthorization };

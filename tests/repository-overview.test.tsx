@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { ComponentProps } from "react";
+import { useState, type ComponentProps } from "react";
 import { RepositoryOverview, type PullRequestGroup } from "@/components/repository-overview";
 import { i18n } from "@/lib/i18n";
-import type { RepositoryReviewSummary } from "@/lib/review-types";
+import type { PullRequestStateFilter, RepositoryReviewSummary } from "@/lib/review-types";
 
 const repository = { owner: "octo", name: "narrant" };
 const pullRequest = {
@@ -61,26 +61,42 @@ function renderOverview(options: {
   const onRetryDiscovery = vi.fn();
   const onConnectGitHub = vi.fn();
   const onOpenReview = vi.fn();
+  const onLoadMoreDiscovery = vi.fn();
+  const onPullRequestFilterChange = vi.fn();
   const overview = <RepositoryOverview
     repositoryName="narrant"
     repositoryPath="/work/narrant"
     pullRequestGroups={options.groups ?? []}
     reviews={options.reviews ?? []}
     discoveryLoading={options.loading ?? false}
+    discoveryLoadingMore={false}
+    discoveryComplete={!options.discoveryError && !(options.groups ?? []).some((group) => group.error || group.nextPage !== null)}
+    pullRequestFilter="open"
+    onPullRequestFilterChange={onPullRequestFilterChange}
     discoveryError={options.discoveryError}
     githubConnected={options.connected ?? true}
     openingReviewKey={options.openingReviewKey}
     reviewNavigationBusy={options.reviewNavigationBusy}
     onRetryDiscovery={onRetryDiscovery}
+    onRefreshDiscovery={onRetryDiscovery}
+    onLoadMoreDiscovery={onLoadMoreDiscovery}
     onConnectGitHub={onConnectGitHub}
     onOpenReview={onOpenReview}
     onOpenPullRequest={onOpenPullRequest}
     localBranches={<p>Local branch content</p>}
   />;
-  const view = render(overview);
+  /** 模拟 lifecycle 持有筛选，组件只负责将用户选择交回应用边界。 */
+  function ControlledOverview({ overrides = {} }: { overrides?: Partial<ComponentProps<typeof RepositoryOverview>> }) {
+    const [filter, setFilter] = useState<PullRequestStateFilter>("open");
+    return <RepositoryOverview {...overview.props} pullRequestFilter={filter} onPullRequestFilterChange={(value) => {
+      onPullRequestFilterChange(value);
+      setFilter(value);
+    }} {...overrides} />;
+  }
+  const view = render(<ControlledOverview />);
   return {
-    onOpenReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub,
-    rerender: (props: Partial<ComponentProps<typeof RepositoryOverview>>) => view.rerender(<RepositoryOverview {...overview.props} {...props} />),
+    onOpenReview, onOpenPullRequest, onRetryDiscovery, onConnectGitHub, onLoadMoreDiscovery, onPullRequestFilterChange,
+    rerender: (props: Partial<ComponentProps<typeof RepositoryOverview>>) => view.rerender(<ControlledOverview overrides={props} />),
   };
 }
 
@@ -106,7 +122,7 @@ function savedPullRequest(value: typeof pullRequest): RepositoryReviewSummary {
 
 describe("RepositoryOverview", () => {
   it.each([
-    { groups: [{ repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null }] },
+    { groups: [{ repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [pullRequest], error: null }] },
     {},
     { discoveryError: "network unavailable" },
     { connected: false, discoveryError: "anonymous discovery unavailable" },
@@ -126,8 +142,8 @@ describe("RepositoryOverview", () => {
     const { onRetryDiscovery } = renderOverview({
       loading: true,
       groups: [
-        { repository, remoteNames: ["origin"], pullRequests: hasRows ? [pullRequest] : [], error: null },
-        { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" },
+        { repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: hasRows ? [pullRequest] : [], error: null },
+        { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], page: 1, nextPage: null, pullRequests: [], error: "request failed" },
       ],
     });
     const refresh = screen.getByRole("button", { name: "正在刷新列表" });
@@ -151,7 +167,7 @@ describe("RepositoryOverview", () => {
   });
 
   it("单仓库刷新失败后保留条目并显示错误与过期提示", () => {
-    renderOverview({ groups: [{ repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: "request failed" }] });
+    renderOverview({ groups: [{ repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [pullRequest], error: "request failed" }] });
     expect(screen.getByText("#40 Repository overview")).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("request failed；在线元数据可能不是最新。");
     expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled();
@@ -175,7 +191,7 @@ describe("RepositoryOverview", () => {
       { ...pullRequest, number: 43, title: "Merged change", state: "merged" },
     ];
     const reviews = source === "saved" ? values.map(savedPullRequest) : [];
-    const groups = source === "online" ? [{ repository, remoteNames: ["origin"], pullRequests: values, error: null }] : [];
+    const groups = source === "online" ? [{ repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: values, error: null }] : [];
     const before = JSON.stringify({ reviews, groups });
     const actions = renderOverview({ reviews, groups, connected: source === "online" });
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
@@ -202,7 +218,7 @@ describe("RepositoryOverview", () => {
   it("在线最新状态覆盖已保存状态，继续审核仍复用原 Review", async () => {
     const { onOpenReview } = renderOverview({
       reviews: [saved],
-      groups: [{ repository, remoteNames: ["origin"], pullRequests: [{ ...pullRequest, state: "merged" }], error: null }],
+      groups: [{ repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [{ ...pullRequest, state: "merged" }], error: null }],
     });
     expect(screen.getByText("没有已开启的 Pull Request")).toBeVisible();
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
@@ -219,8 +235,8 @@ describe("RepositoryOverview", () => {
   it("筛选空结果保留离线提示和状态入口，切换 All 后可继续已有 Review", async () => {
     const closed = savedPullRequest({ ...pullRequest, state: "closed" });
     renderOverview({ reviews: [closed], connected: false, discoveryError: "offline" });
-    expect(screen.getByText("没有已开启的 Pull Request")).toBeVisible();
-    expect(screen.getByText("可以切换状态查看其他 Pull Request。")).toBeVisible();
+    expect(screen.getByText("已加载的结果中没有已开启的 Pull Request")).toBeVisible();
+    expect(screen.getByText("结果尚未完整加载，可以继续加载或重试失败的来源。")).toBeVisible();
     expect(screen.getByText(/在线元数据可能不是最新/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "连接 GitHub" })).not.toBeInTheDocument();
     await selectState("全部");
@@ -228,11 +244,11 @@ describe("RepositoryOverview", () => {
   });
 
   it("筛选后无结果仍显示局部失败，刷新期间与成功后保留选择", async () => {
-    const group = { repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null };
-    const failedGroup = { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" };
+    const group = { repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [pullRequest], error: null };
+    const failedGroup = { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], page: 1, nextPage: null, pullRequests: [], error: "request failed" };
     const { rerender, onRetryDiscovery } = renderOverview({ reviews: [saved], groups: [group, failedGroup] });
     await selectState("已合并");
-    expect(screen.getByText("没有已合并的 Pull Request")).toBeVisible();
+    expect(screen.getByText("已加载的结果中没有已合并的 Pull Request")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "重新尝试" }));
     expect(onRetryDiscovery).toHaveBeenCalledOnce();
     rerender({ pullRequestGroups: [group, failedGroup], discoveryLoading: true });
@@ -286,8 +302,8 @@ describe("RepositoryOverview", () => {
     const older = { ...pullRequest, number: 99, title: "Older", githubUpdatedAt: "2026-07-30T08:00:00Z" };
     const newer = { ...pullRequest, number: 2, title: "Newer", githubUpdatedAt: "2026-08-01T08:00:00Z" };
     renderOverview({ groups: [
-      { repository, remoteNames: ["origin"], pullRequests: [older], error: null },
-      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [newer], error: null },
+      { repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [older], error: null },
+      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], page: 1, nextPage: null, pullRequests: [newer], error: null },
     ] });
 
     const rows = screen.getAllByRole("listitem");
@@ -297,7 +313,7 @@ describe("RepositoryOverview", () => {
     expect(screen.queryByText(/remotes:/)).not.toBeInTheDocument();
 
     cleanup();
-    renderOverview({ groups: [{ repository, remoteNames: ["origin"], pullRequests: [older], error: null }] });
+    renderOverview({ groups: [{ repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [older], error: null }] });
     expect(screen.queryByText("octo/narrant")).not.toBeInTheDocument();
   });
 
@@ -328,7 +344,7 @@ describe("RepositoryOverview", () => {
   });
 
   it("合并在线结果并区分开始、继续与有更新", () => {
-    const group = { repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null };
+    const group = { repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [pullRequest], error: null };
     const { onOpenReview } = renderOverview({
       reviews: [saved],
       groups: [group],
@@ -349,7 +365,7 @@ describe("RepositoryOverview", () => {
 
   it("打开 Pull Request Review 时立即在目标按钮显示 Spinner", () => {
     renderOverview({
-      groups: [{ repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null }],
+      groups: [{ repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [pullRequest], error: null }],
       openingReviewKey: "octo/narrant#40",
       reviewNavigationBusy: true,
     });
@@ -363,8 +379,8 @@ describe("RepositoryOverview", () => {
 
   it("多个 repository 局部失败时保留成功结果并提供一次恢复操作", () => {
     const { onRetryDiscovery } = renderOverview({ groups: [
-      { repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null },
-      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" },
+      { repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [pullRequest], error: null },
+      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], page: 1, nextPage: null, pullRequests: [], error: "request failed" },
     ] });
     expect(screen.getByText("#40 Repository overview")).toBeVisible();
     expect(screen.getByText(/other\/fork/)).toHaveTextContent(/request failed/);
@@ -374,17 +390,17 @@ describe("RepositoryOverview", () => {
 
   it("部分 repository 成功但没有 PR 时仍把失败作为局部提示", () => {
     renderOverview({ groups: [
-      { repository, remoteNames: ["origin"], pullRequests: [], error: null },
-      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], pullRequests: [], error: "request failed" },
+      { repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [], error: null },
+      { repository: { owner: "other", name: "fork" }, remoteNames: ["upstream"], page: 1, nextPage: null, pullRequests: [], error: "request failed" },
     ] });
     expect(screen.getByText(/other\/fork/)).toHaveTextContent(/request failed/);
-    expect(screen.getByText("没有可审核的 Pull Request")).toBeVisible();
+    expect(screen.getByText("已加载的结果中没有已开启的 Pull Request")).toBeVisible();
     expect(screen.queryByText("无法加载 Pull Requests")).not.toBeInTheDocument();
   });
 
   it.each([
     [{ connected: false }, "连接 GitHub 以访问授权范围内的 Pull Request"],
-    [{ connected: true }, "没有可审核的 Pull Request"],
+    [{ connected: true }, "没有已开启的 Pull Request"],
     [{ connected: true, discoveryError: "request failed" }, "重新尝试"],
   ])("区分 Pull Request 空状态 %#", (options, expected) => {
     renderOverview(options);
@@ -403,7 +419,7 @@ describe("RepositoryOverview", () => {
     expect(screen.getByRole("button", { name: "连接 GitHub" })).toBeVisible();
     expect(screen.getByText("private repository")).toBeVisible();
     expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "重新尝试" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新尝试" })).toBeEnabled();
   });
 
   it("英文 locale 同时翻译标签、状态、恢复动作和 ARIA label", async () => {
@@ -427,5 +443,52 @@ describe("RepositoryOverview", () => {
     await selectState("Closed", "Pull Request status");
     expect(screen.getByText("No Closed Pull Requests")).toBeVisible();
     expect(screen.getByText("Choose another status to see other Pull Requests.")).toBeVisible();
+  });
+});
+
+describe("Pull Request 分页呈现", () => {
+  it("没有匹配条目的扫描页显示未完整加载并允许继续，不误报完整空结果", async () => {
+    const { onLoadMoreDiscovery, onPullRequestFilterChange, onOpenReview, onOpenPullRequest } = renderOverview({
+      groups: [{ repository, remoteNames: ["origin"], page: 1, nextPage: 2, error: null, pullRequests: [{ ...pullRequest, state: "merged" }] }],
+    });
+    await selectState("已关闭");
+    expect(onPullRequestFilterChange).toHaveBeenCalledWith("closed");
+    expect(screen.getByText("已加载的结果中没有已关闭的 Pull Request")).toBeVisible();
+    expect(screen.queryByText("没有已关闭的 Pull Request")).not.toBeInTheDocument();
+    expect(screen.queryByText("已到末尾")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    expect(onLoadMoreDiscovery).toHaveBeenCalledOnce();
+    expect(onOpenReview).not.toHaveBeenCalled();
+    expect(onOpenPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("追加期间保留行，禁用网络操作；成功末页才显示末尾", () => {
+    const { rerender, onLoadMoreDiscovery } = renderOverview({
+      groups: [{ repository, remoteNames: ["origin"], page: 1, nextPage: 2, error: null, pullRequests: [pullRequest] }],
+    });
+    rerender({ discoveryLoading: true, discoveryLoadingMore: true });
+    expect(screen.getByText("#40 Repository overview")).toBeVisible();
+    expect(screen.getByRole("button", { name: "刷新列表" })).toBeDisabled();
+    const more = screen.getByRole("button", { name: "正在加载更多" });
+    expect(more).toBeDisabled();
+    expect(more).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(more);
+    expect(onLoadMoreDiscovery).not.toHaveBeenCalled();
+    rerender({ discoveryComplete: true, pullRequestGroups: [{ repository, remoteNames: ["origin"], page: 2, nextPage: null, error: null, pullRequests: [pullRequest] }] });
+    expect(screen.getByText("已到末尾")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+  });
+
+  it("首次加载没有假空状态；英文分页状态与按钮保持翻译", async () => {
+    const { rerender } = renderOverview({ loading: true });
+    expect(screen.getByText("正在加载 Pull Request…")).toBeVisible();
+    expect(screen.queryByText("没有已开启的 Pull Request")).not.toBeInTheDocument();
+    expect(screen.queryByText("已到末尾")).not.toBeInTheDocument();
+    await i18n.changeLanguage("en");
+    rerender({ discoveryLoading: false, discoveryComplete: false, pullRequestGroups: [{ repository, remoteNames: ["origin"], page: 1, nextPage: 2, error: null, pullRequests: [] }] });
+    expect(screen.getByText("No Open Pull Requests in loaded results")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
+    rerender({ discoveryLoading: true, discoveryLoadingMore: true });
+    expect(screen.getByRole("button", { name: "Loading more" })).toBeDisabled();
   });
 });

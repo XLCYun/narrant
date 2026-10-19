@@ -13,12 +13,30 @@ export type DiscoveredPullRequest = {
   head: { ref: string; sha: string };
 };
 
-/** 一个 GitHub repository 的独立 discovery 结果。 */
+/** 当前概览独立保存的生命周期查询，Closed 不包含已合并条目。 */
+export type PullRequestStateFilter = "open" | "closed" | "merged" | "all";
+
+/** 单个来源下一次需要读取或重试的页码。 */
+export type PullRequestPageRequest = {
+  repository: { owner: string; name: string };
+  page: number;
+};
+
+/** 省略 pages 时读取所有来源首页，传入时只读取指定来源各一页。 */
+export type PullRequestDiscoveryQuery = {
+  state: PullRequestStateFilter;
+  pages?: PullRequestPageRequest[];
+};
+
+/** 一个 GitHub repository 的独立 discovery 页；条目保留扫描到的原始生命周期。 */
 export type PullRequestGroup = {
   repository: { owner: string; name: string };
   remoteNames: string[];
   pullRequests: DiscoveredPullRequest[];
   error: string | null;
+  page: number;
+  /** 成功时为下一页，失败时为重试页；null 只代表成功到达末尾。 */
+  nextPage: number | null;
 };
 
 /** Repository Overview 中显式呈现的 Review Selection。 */

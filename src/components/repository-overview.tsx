@@ -1,11 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { AlertCircleIcon, GitBranchIcon, GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestIcon, HistoryIcon, InformationCircleIcon, ListViewIcon, Refresh01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useTranslation } from "react-i18next";
 import { BranchRelation, branchName } from "@/components/branch-relation";
-import type { DiscoveredPullRequest, PullRequestGroup, RepositoryReviewSummary } from "@/lib/review-types";
+import type { DiscoveredPullRequest, PullRequestGroup, PullRequestStateFilter, RepositoryReviewSummary } from "@/lib/review-types";
 import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -19,13 +19,19 @@ type Props = {
   reviews: RepositoryReviewSummary[];
   pullRequestGroups: PullRequestGroup[];
   discoveryLoading: boolean;
+  discoveryLoadingMore: boolean;
+  discoveryComplete: boolean;
   discoveryError?: string;
+  pullRequestFilter: PullRequestStateFilter;
   githubConnected: boolean;
   localBranches: ReactNode;
   initialTab?: "pull-requests" | "branches" | "history";
   openingReviewKey?: string;
   reviewNavigationBusy?: boolean;
   onRetryDiscovery: () => void;
+  onRefreshDiscovery: () => void;
+  onLoadMoreDiscovery: () => void;
+  onPullRequestFilterChange: (filter: PullRequestStateFilter) => void;
   onConnectGitHub: () => void;
   onOpenReview: (review: RepositoryReviewSummary) => void;
   onOpenPullRequest: (
@@ -42,8 +48,6 @@ type PullRequestRow = {
   discovered?: DiscoveredPullRequest;
 };
 
-/** 仅控制当前概览中可见条目的生命周期筛选，不写入 Review 或 GitHub。 */
-type PullRequestStateFilter = "open" | "closed" | "merged" | "all";
 /** 生命周期图标由筛选与行标签共用，颜色只用于行内胶囊标签。 */
 const pullRequestStates = [
   {
@@ -133,13 +137,16 @@ function mergePullRequests(reviews: RepositoryReviewSummary[], groups: PullReque
 /** Repository 的任务概览：缓存优先呈现 Pull Request，并隔离远端失败。 */
 export function RepositoryOverview(props: Props) {
   const { t, i18n } = useTranslation(["repository", "common", "github", "review"]);
-  const [stateFilter, setStateFilter] = useState<PullRequestStateFilter>("open");
+  const stateFilter = props.pullRequestFilter;
+  const hasMore = props.pullRequestGroups.some((group) => !group.error && group.nextPage !== null);
   const rows = mergePullRequests(props.reviews, props.pullRequestGroups);
   const visibleRows = rows.filter((row) => stateFilter === "all" || rowMetadata(row).state === stateFilter);
   const groupErrors = props.pullRequestGroups.flatMap((group) => group.error ? [group.error] : []);
   const hasSuccessfulGroup = props.pullRequestGroups.some((group) => !group.error);
   const hasPartialFailure = hasSuccessfulGroup && groupErrors.length > 0;
   const blockingDiscoveryError = props.discoveryError ?? (hasPartialFailure ? undefined : groupErrors[0]);
+  const complete = props.discoveryComplete && !props.discoveryLoading && !props.discoveryError && groupErrors.length === 0;
+  const showConnect = rows.length === 0 && !props.githubConnected && !props.discoveryLoading && !hasSuccessfulGroup;
   const repositoryIdentities = new Set([
     ...props.pullRequestGroups.map((group) => `${group.repository.owner.toLowerCase()}/${group.repository.name.toLowerCase()}`),
     ...props.reviews.flatMap((review) => review.selection.kind === "pull-request"
@@ -167,10 +174,10 @@ export function RepositoryOverview(props: Props) {
           <TabsTrigger value="history"><Icon icon={HistoryIcon} />{t("repository:tabs.history")}</TabsTrigger>
         </TabsList>
         <TabsContent value="pull-requests" className="mt-5">
-          <Tabs value={stateFilter} onValueChange={(value) => setStateFilter(value as PullRequestStateFilter)} className="gap-0 rounded-lg border">
+          <Tabs value={stateFilter} onValueChange={(value) => props.onPullRequestFilterChange(value as PullRequestStateFilter)} className="gap-0 rounded-lg border">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b p-3 sm:p-4">
               <span className="text-sm text-muted-foreground">{t("repository:pullRequestFilter.label")}</span>
-              <TabsList aria-label={t("repository:pullRequestFilter.accessibleLabel")} className="max-w-full">
+              <TabsList aria-label={t("repository:pullRequestFilter.accessibleLabel")} className="max-w-full flex-wrap group-data-horizontal/tabs:h-auto">
                 {pullRequestStateFilters.map(({ value, icon }) => <TabsTrigger
                   key={value}
                   value={value}
@@ -186,16 +193,16 @@ export function RepositoryOverview(props: Props) {
                 className="ml-auto"
                 disabled={props.discoveryLoading}
                 aria-busy={props.discoveryLoading || undefined}
-                onClick={props.onRetryDiscovery}
+                onClick={props.onRefreshDiscovery}
               >
                 {props.discoveryLoading ? <Spinner aria-hidden /> : <Icon icon={Refresh01Icon} aria-hidden />}
-                {t(props.discoveryLoading ? "repository:refreshingPullRequests" : "repository:refreshPullRequests")}
+                {t(props.discoveryLoading && !props.discoveryLoadingMore ? "repository:refreshingPullRequests" : "repository:refreshPullRequests")}
               </Button>
             </div>
             <TabsContent value={stateFilter}>
-              {hasPartialFailure && <div className="m-4 flex items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
+              {hasPartialFailure && <div className="m-4 flex flex-wrap items-start gap-3 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
                 <Icon icon={AlertCircleIcon} className="mt-0.5 shrink-0" aria-hidden />
-                <div className="min-w-0 flex-1 space-y-1">
+                <div className="min-w-0 flex-1 space-y-1 break-words">
                   {props.pullRequestGroups.filter((group) => group.error).map((group) => {
                     const identity = `${group.repository.owner}/${group.repository.name}`;
                     return <p key={identity}>{t("repository:partialFailure", { repository: identity, error: group.error })}</p>;
@@ -205,8 +212,9 @@ export function RepositoryOverview(props: Props) {
                   {props.discoveryLoading && <Spinner aria-hidden />}{t("repository:retry")}
                 </Button>
               </div>}
-              {blockingDiscoveryError && rows.length > 0 && <div className="m-4 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
-                {blockingDiscoveryError}；{t("repository:stale")}
+              {blockingDiscoveryError && rows.length > 0 && <div className="m-4 flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground" role="status">
+                <p className="min-w-0 flex-1 break-words">{blockingDiscoveryError}；{t("repository:stale")}</p>
+                <Button size="sm" variant="outline" disabled={props.discoveryLoading} onClick={props.onRetryDiscovery}>{t("repository:retry")}</Button>
               </div>}
               {visibleRows.length > 0 && <ul className="divide-y">
                 {visibleRows.map((row) => {
@@ -247,16 +255,26 @@ export function RepositoryOverview(props: Props) {
                   </li>;
                 })}
               </ul>}
-              {rows.length > 0 && visibleRows.length === 0 && <PullRequestStatus
+              {visibleRows.length === 0 && !showConnect && (rows.length > 0 || !blockingDiscoveryError) && <PullRequestStatus
                 icon={InformationCircleIcon}
-                title={t("repository:pullRequestFilter.empty", { state: t(`repository:pullRequestFilter.${stateFilter}`) })}
-                description={t("repository:pullRequestFilter.emptyDescription")}
+                title={t(props.discoveryLoading ? "repository:loadingPullRequests" : complete ? (stateFilter === "all" ? "repository:noPullRequests" : "repository:pullRequestFilter.empty") : (stateFilter === "all" ? "repository:pullRequestPagination.noLoadedResults" : "repository:pullRequestPagination.noLoadedMatches"), { state: t(`repository:pullRequestFilter.${stateFilter}`) })}
+                description={props.discoveryLoading ? undefined : t(complete ? "repository:pullRequestFilter.emptyDescription" : "repository:pullRequestPagination.incomplete")}
               />}
-              {rows.length === 0 && (!props.githubConnected
-                ? <PullRequestStatus icon={GitPullRequestIcon} title={t("repository:connectForPrivate")} description={blockingDiscoveryError} action={<Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>} />
-                : blockingDiscoveryError
-                  ? <PullRequestStatus icon={AlertCircleIcon} title={t("repository:loadFailed")} description={blockingDiscoveryError} action={<Button variant="outline" disabled={props.discoveryLoading} aria-busy={props.discoveryLoading || undefined} onClick={props.onRetryDiscovery}>{props.discoveryLoading && <Spinner aria-hidden />}{t("repository:retry")}</Button>} />
-                  : <PullRequestStatus icon={InformationCircleIcon} title={t("repository:noPullRequests")} description={t("repository:noPullRequestsDescription")} />)}
+              {rows.length === 0 && (blockingDiscoveryError || showConnect) && <PullRequestStatus
+                icon={AlertCircleIcon}
+                title={t(props.githubConnected ? "repository:loadFailed" : "repository:connectForPrivate")}
+                description={blockingDiscoveryError}
+                action={<div className="flex flex-wrap justify-center gap-2">
+                  {blockingDiscoveryError && <Button variant="outline" disabled={props.discoveryLoading} aria-busy={props.discoveryLoading || undefined} onClick={props.onRetryDiscovery}>{props.discoveryLoading && <Spinner aria-hidden />}{t("repository:retry")}</Button>}
+                  {!props.githubConnected && <Button onClick={props.onConnectGitHub}>{t("github:connect")}</Button>}
+                </div>}
+              />}
+              {(hasMore || props.discoveryLoadingMore || (complete && visibleRows.length > 0)) && <div className="flex flex-wrap items-center justify-center gap-3 border-t p-4">
+                {hasMore || props.discoveryLoadingMore ? <Button size="sm" variant="outline" disabled={props.discoveryLoading || Boolean(props.discoveryError)} aria-busy={props.discoveryLoadingMore || undefined} onClick={props.onLoadMoreDiscovery}>
+                  {props.discoveryLoadingMore && <Spinner aria-hidden />}
+                  {t(props.discoveryLoadingMore ? "repository:pullRequestPagination.loadingMore" : "repository:pullRequestPagination.loadMore")}
+                </Button> : <p className="text-sm text-muted-foreground" role="status">{t("repository:pullRequestPagination.end")}</p>}
+              </div>}
             </TabsContent>
           </Tabs>
         </TabsContent>

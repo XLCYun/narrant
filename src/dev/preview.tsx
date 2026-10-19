@@ -354,6 +354,12 @@ function ReviewHistoryPreview({ initiallyOpening = false }: { initiallyOpening?:
     reviews={reviewHistory}
     pullRequestGroups={[]}
     discoveryLoading={false}
+    discoveryLoadingMore={false}
+    discoveryComplete
+    pullRequestFilter="open"
+    onPullRequestFilterChange={() => undefined}
+    onRefreshDiscovery={() => undefined}
+    onLoadMoreDiscovery={() => undefined}
     githubConnected
     localBranches={null}
     initialTab="history"
@@ -809,7 +815,7 @@ const previews: Record<string, PreviewDefinition> = {
     },
   },
   "pull-requests": {
-    label: "Pull Requests 筛选与刷新",
+    label: "Pull Requests 分页、筛选与刷新",
     scenarios: {
       default: { label: "四种状态与长短标题", render: () => <PullRequestsPreview /> },
       "closed-only": { label: "Open 筛选空结果", render: () => <PullRequestsPreview mode="closed-only" /> },

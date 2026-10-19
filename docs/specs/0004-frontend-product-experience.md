@@ -149,10 +149,10 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - 每次进入一个 Repository 概览时，Pull Requests 状态筛选默认选择 `Open`，可切换 `Open`、`Closed`、`Merged` 和 `All`；`Closed` 只包含关闭但未合并的条目，未关闭的 Draft 归入 `Open`。筛选在合并已保存 Review 与在线发现条目后统一执行，在线元数据可用时以在线状态为准。
 - 状态筛选位于 Pull Request 列表边框内的顶部工具栏，标签“状态”后常驻显示四个带图标的圆角单选标签，与上方任务导航复用 shadcn Tabs 组件及默认样式，不单独覆盖颜色或圆角。Open、Closed、Merged 分别使用 PR、关闭 PR、合并图标，All 使用列表图标；支持方向键移动焦点和 Enter / Space 选择。窄窗口允许工具栏换行，四个状态仍全部可见。
 - 状态筛选文案随应用语言切换：中文显示“已开启 / 已关闭 / 已合并 / 全部”，英文显示“Open / Closed / Merged / All”；前三项与行内状态标签保持一致，空结果提示也使用当前语言的状态名称。
-- 状态筛选只影响当前概览的可见条目，不修改 Pull Request、Review 或 Snapshot，也不因切换筛选发起网络请求。当前概览内切换标签、刷新列表及刷新失败都保留所选状态；该选择不跨概览持久化。
+- 四种状态各自在当前概览保存查询结果与分页位置。首次选择一个状态时请求该查询的有限首页，返回已完成的查询时复用其已加载内容；切换状态后旧查询的迟到响应不得发布。状态选择不跨概览持久化，切换任务标签、刷新及失败保留当前筛选。查询不修改 Pull Request、Review 或 Snapshot。GitHub Identity 变化后保留可用内容，当前筛选重取首页，其他筛选在下次选择时重取首页。
 - Pull Requests 顶部工具栏常驻“刷新列表”按钮，正常列表、筛选空结果、全空和失败状态均可使用。按钮复用 shadcn Button，支持中英文与键盘操作；窄窗口允许工具栏换行，刷新入口始终可见。
-- “刷新列表”重新获取当前 Repository 的 Pull Request Discovery，只更新概览列表，不创建 Review 或刷新已打开的 Review Snapshot。加载和刷新期间显示 Spinner 与进行中文案，禁用刷新及失败重试入口，保留已有列表和状态筛选；成功后展示最新结果，失败时保留可用条目并显示错误，允许再次刷新。多个 GitHub repository 分别处理结果：成功的更新，失败的保留上次条目和本轮错误；不保留已经不在 Discovery 中的 repository。
-- 当前状态无匹配条目时，显示包含所选状态的空结果提示和切换说明，筛选控件始终保留；整个列表为空时继续区分未连接、无 Pull Request 与请求失败，局部失败提示不因筛选而隐藏。
+- “刷新列表”重新获取当前筛选的首页，只更新概览，不创建 Review 或刷新已打开的 Review Snapshot。每个去重来源每次操作最多请求一页 30 条，按 GitHub 更新时间倒序；不会后台扫描全部历史，也不为填满筛选结果追加请求。加载、追加和刷新期间显示 Spinner 与进行中文案，禁用同一查询的刷新、加载更多及重试入口，保留可用条目并允许切换筛选。刷新成功的来源替换全部旧分页；失败来源保留旧条目，重试时从首页替换；已不在 remotes 中的来源不再保留。
+- 列表底部提供“加载更多”，每次只追加各正常来源的下一页；到达末尾后显示“已到末尾”。后续页由 GitHub Link next 关系确定。Closed 和 Merged 共享 REST closed 扫描页，再按 merged_at 区分，因此一页可能没有所选状态的条目，但仍可继续加载。初次请求显示加载状态；尚有后续页或来源失败时，空结果只说明“已加载的结果中没有匹配项”，不得宣称完整无结果或末尾。只有所有来源成功到末尾才显示完整空结果。未连接与请求失败仍提供对应恢复操作，局部错误不因筛选而隐藏。
 - 多个 GitHub repository 的 Pull Requests 使用一个按 GitHub 最近更新时间降序排列的扁平列表，不按 Git remote 或 GitHub repository 分组。只有发现多个不同 GitHub repository identity 时，每行才以弱化标签显示 `owner/repository`；`origin`、`upstream` 等 remote 名称仅用于诊断，不进入正常界面。
 - Pull Request 行在标题中显示一次 `#编号`，右侧操作只显示“开始审核”或“继续审核”；整行不作为点击目标。列表显示 Pull Request 相对更新时间。
 - Pull Request 行内的生命周期状态使用现有 Badge 胶囊标签：Open 为绿色、Closed 为红色、Merged 为紫色，配合对应的 PR、关闭 PR、合并图标及中英文状态文案；浅色与深色主题均采用状态色的淡底和清晰文字。草稿标记独立保留，状态筛选按钮仍使用 Tabs 的默认样式。
@@ -160,7 +160,7 @@ Pull Request 描述与 revision 详情放入按需打开的右侧概览面板。
 - GitHub 不可用时，已保存的 Pull Request Review 仍留在 Pull Requests 标签中，并以低干扰提示说明元数据可能不是最新。
 - Pull Request 空状态区分未连接 GitHub、确实没有 Pull Request 和 GitHub 请求失败；连接 GitHub 必须由用户主动触发。
 - 未连接 GitHub、没有 Pull Request 与 GitHub 请求失败共用宽度约 480–560px 的紧凑状态面板，只展示一次状态信息；可恢复状态使用中性层级，destructive 颜色仅用于具体阻断错误。未连接时提供“连接 GitHub”，请求失败时提供“重新尝试”，正常空状态不显示错误样式。
-- 多个 GitHub repository 中只有部分 discovery 失败时继续显示成功结果，并在列表上方按 repository identity 给出低干扰的局部失败提示与“重新尝试”，不把整个 Pull Request 标签切换为错误状态。
+- 多个 GitHub repository 中只有部分 discovery 失败时继续显示成功结果，并在列表上方按 repository identity 给出低干扰的局部失败提示与“重新尝试”。正常来源仍能加载更多；重试只访问失败来源的原页，成功来源不重复翻页。分页或刷新失败保留已加载内容，末尾提示必须等待所有失败恢复。
 - GitHub App 安装、Device Flow、复制授权信息和退出登录进入侧边栏底部的 GitHub 连接界面，不长期占用 Repository 概览。
 - 本地分支标签默认使用仓库默认分支作为 Base Ref、当前检出分支作为 Head Ref。需要在应用边界提供这两项信息，而不是继续依赖分支列表顺序。
 - Head 与 Base 选择器通过弱化标记解释自动默认值：当前检出分支标记为“当前分支”，仓库默认分支标记为“默认分支”；展开后的对应选项保留相同标记。标记使用固定高度的 `inline-flex` 居中盒，文字在选中值和弹层选项中都保持水平、垂直居中。一个分支同时具备两种身份时展示两个标记，但仍按 Base 与 Head 相同的规则禁止开始 Review。

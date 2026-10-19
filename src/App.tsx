@@ -146,7 +146,8 @@ export function App() {
   const authStatus = githubIdentity.status;
   const pullRequestGroups = pullRequestDiscoveryLifecycle.groups;
   const discoveryLoading = pullRequestDiscoveryLifecycle.transition.kind === "loading"
-    || pullRequestDiscoveryLifecycle.transition.kind === "refreshing";
+    || pullRequestDiscoveryLifecycle.transition.kind === "refreshing"
+    || pullRequestDiscoveryLifecycle.transition.kind === "loading-more";
   const discoveryError = pullRequestDiscoveryLifecycle.error?.detail;
   const visibleError = error || appShell.sidebar.error || "";
   const reviewOpeningKey = appShell.transition.kind === "opening-review" ? appShell.transition.key : undefined;
@@ -427,9 +428,15 @@ export function App() {
         reviews={repositoryReviews}
         pullRequestGroups={pullRequestGroups}
         discoveryLoading={discoveryLoading}
+        discoveryLoadingMore={pullRequestDiscoveryLifecycle.transition.kind === "loading-more"}
+        discoveryComplete={pullRequestDiscoveryLifecycle.complete}
+        pullRequestFilter={pullRequestDiscoveryLifecycle.filter}
+        onPullRequestFilterChange={pullRequestDiscoveryLifecycle.selectFilter}
         discoveryError={discoveryError}
         githubConnected={authStatus?.signedIn ?? false}
         onRetryDiscovery={() => void pullRequestDiscoveryLifecycle.retry()}
+        onRefreshDiscovery={() => void pullRequestDiscoveryLifecycle.refresh()}
+        onLoadMoreDiscovery={() => void pullRequestDiscoveryLifecycle.loadMore()}
         onConnectGitHub={() => void connectGitHub()}
         onOpenReview={(review) => void openSavedReview(review)}
         onOpenPullRequest={(repository, pullRequest) => void openDiscoveredPullRequest(repository, pullRequest)}
