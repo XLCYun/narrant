@@ -19,7 +19,7 @@ use storage::{validate_manifest, Storage, MAX_ARCHIVE};
 use tokio::sync::watch;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-const ORIGIN: &str = "https://github.com/XLCYun/narrant/releases/download";
+const ORIGIN: &str = "https://github.com/XLCYun/CodeGraph/releases/download";
 
 /// GitHub 下载只跟随官方 HTTPS 资产域名；测试源仍可直连本地服务器。
 fn trusted_download_redirect(url: &reqwest::Url) -> bool {
@@ -189,11 +189,19 @@ impl LanguageSupportPacks {
             })
             .collect();
         let (changed, _) = watch::channel(1);
+        let client = reqwest::Client::builder();
+        // 本地测试下载不经过系统代理；正式固定发布源保留用户代理策略。
+        #[cfg(test)]
+        let client = if origin != ORIGIN {
+            client.no_proxy()
+        } else {
+            client
+        };
         Ok(Self {
             inner: Arc::new(Inner {
                 storage,
                 origin,
-                client: reqwest::Client::builder()
+                client: client
                     .redirect(reqwest::redirect::Policy::custom(|attempt| {
                         if attempt.previous().len() < 5 && trusted_download_redirect(attempt.url())
                         {
@@ -414,7 +422,7 @@ impl LanguageSupportPacks {
     async fn install(&self, key: &PackKey) -> Result<u64, String> {
         if self.inner.origin == ORIGIN && !model::published(key.id) {
             return Err(format!(
-                "{} 原生语言支持包尚未发布；需要经过验证的本地安装包。",
+                "{} CodeGraph 语言支持包尚未发布；需要经过验证的本地安装包。",
                 key.id.slug()
             ));
         }
@@ -465,28 +473,30 @@ impl LanguageSupportPacks {
 
     /// 读取有界清单、流式下载并验证摘要，随后让阻塞 worker 处理解压和提交。
     async fn install_in(&self, key: &PackKey, temporary: &Path) -> Result<u64, String> {
-        let base = format!(
-            "{}/language-pack-{}-v{}/{}",
-            self.inner.origin,
-            key.id.slug(),
-            key.version,
-            self.inner.storage.target
-        );
-        let mut response = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), result = self.inner.client.get(format!("{base}-manifest.json")).send() => result.map_err(display)?.error_for_status().map_err(display)? };
-        let mut bytes = vec![];
-        while let Some(chunk) = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), chunk = response.chunk() => chunk.map_err(display)? }
-        {
-            if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
-                return Err("语言支持包清单过大".into());
-            }
-            bytes.extend_from_slice(&chunk);
+        let release = format!("{}/v{}", self.inner.origin, key.version);
+        let asset = format!("{}-{}", key.id.slug(), self.inner.storage.target);
+        let checksums = self
+            .download_metadata(&format!("{release}/SHA256SUMS"), 64 * 1024)
+            .await?;
+        let manifest_name = format!("{asset}-manifest.json");
+        let archive_name = format!("{asset}-pack.tar.gz");
+        let bytes = self
+            .download_metadata(&format!("{release}/{manifest_name}"), 2 * 1024 * 1024)
+            .await?;
+        let expected_manifest = checksum(&checksums, &manifest_name)?;
+        let expected_archive = checksum(&checksums, &archive_name)?;
+        if format!("{:x}", Sha256::digest(&bytes)) != expected_manifest {
+            return Err("CodeGraph 发布清单校验失败".into());
         }
         let manifest: Manifest = serde_json::from_slice(&bytes).map_err(display)?;
         validate_manifest(&manifest, key, &self.inner.storage.target)?;
+        if manifest.archive_sha256 != expected_archive {
+            return Err("CodeGraph 发布摘要与归档清单不一致".into());
+        }
         self.update(key, |snapshot| {
             snapshot.total_bytes = Some(manifest.archive_size)
         });
-        let mut response = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), result = self.inner.client.get(format!("{base}-pack.tar.gz")).send() => result.map_err(display)?.error_for_status().map_err(display)? };
+        let mut response = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), result = self.inner.client.get(format!("{release}/{archive_name}")).send() => result.map_err(display)?.error_for_status().map_err(display)? };
         let archive = temporary.join("download.part");
         let mut output = File::create(&archive).map_err(display)?;
         let mut hash = Sha256::new();
@@ -518,6 +528,20 @@ impl LanguageSupportPacks {
         })
         .await
         .map_err(display)?
+    }
+
+    /// 固定发布元数据流式读取，避免 Content-Length 缺失时失去内存上限。
+    async fn download_metadata(&self, url: &str, limit: usize) -> Result<Vec<u8>, String> {
+        let mut response = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), result = self.inner.client.get(url).send() => result.map_err(display)?.error_for_status().map_err(display)? };
+        let mut bytes = Vec::new();
+        while let Some(chunk) = tokio::select! { _ = self.inner.stop.cancelled() => return Err("应用正在退出".into()), chunk = response.chunk() => chunk.map_err(display)? }
+        {
+            if bytes.len().saturating_add(chunk.len()) > limit {
+                return Err("CodeGraph 发布元数据过大".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }
 
     /// 每次状态变化发布完整快照的递增序号，下载线程无需操作前端事件。
@@ -558,3 +582,28 @@ mod python_tests;
 #[cfg(test)]
 #[path = "tests/native.rs"]
 mod native_tests;
+
+/// 发布摘要使用唯一文件名匹配，重复条目和非规范 SHA-256 均失败。
+fn checksum(bytes: &[u8], name: &str) -> Result<String, String> {
+    let content = std::str::from_utf8(bytes).map_err(display)?;
+    let mut entries = BTreeMap::new();
+    for line in content.lines() {
+        let (hash, file) = line.split_once("  ").ok_or("CodeGraph 发布摘要格式错误")?;
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || entries.insert(file, hash).is_some()
+        {
+            return Err("CodeGraph 发布摘要无效或重复".into());
+        }
+    }
+    entries
+        .get(name)
+        .map(|hash| (*hash).to_owned())
+        .ok_or_else(|| format!("CodeGraph 发布摘要缺少 {name}"))
+}
+
+#[cfg(test)]
+#[path = "tests/support.rs"]
+pub(crate) mod test_support;

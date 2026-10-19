@@ -1,6 +1,0 @@
-[
-  [
-    "def identity[T = str](x: T) -> T:",
-    "def identity[T = str](x: T) -> T:\n    return x"
-  ]
-]

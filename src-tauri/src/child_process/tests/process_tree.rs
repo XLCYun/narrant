@@ -138,3 +138,56 @@ fn cleanup_error_still_waits_direct_child() {
     assert_eq!(immediate, WAIT_OBJECT_0);
     assert!(retried.is_err());
 }
+
+/// macOS 对只有未回收 zombie 的组返回 EPERM，最终仍必须完成根和整组退出屏障。
+#[cfg(target_os = "macos")]
+#[test]
+fn zombie_only_group_reaps_without_false_permission_error() {
+    let mut command = std::process::Command::new("/bin/sh");
+    command.args(["-c", "exit 0"]);
+    let mut process = ProcessTree::spawn(&mut command).unwrap();
+    let pid = process.child.id() as libc::pid_t;
+    // SAFETY: 等待当前所有者的直接子进程，但 WNOWAIT 保留 zombie，确保真实竞态可重复。
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        },
+        0
+    );
+    // SAFETY: 此组仅包含已退出且尚未回收的自有子进程，信号不会接触其他进程。
+    assert_eq!(unsafe { libc::kill(-pid, libc::SIGKILL) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM)
+    );
+    process.reap().unwrap();
+    assert!(process.reaped);
+    // SAFETY: 信号 0 只确认刚刚回收的专属组已经不存在。
+    assert_eq!(unsafe { libc::kill(-pid, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+}
+
+/// 即使根已经可观察，仍存活的真实成员必须使退出屏障超时，回收后才能通过。
+#[cfg(unix)]
+#[test]
+fn live_member_cannot_satisfy_exit_barrier() {
+    let mut command = std::process::Command::new("/bin/sleep");
+    command.arg("60");
+    let mut process = ProcessTree::spawn(&mut command).unwrap();
+    process.group.snapshot();
+    assert_eq!(
+        process.group.wait().unwrap_err().kind(),
+        std::io::ErrorKind::TimedOut
+    );
+    process.reap().unwrap();
+    process.group.wait().unwrap();
+}

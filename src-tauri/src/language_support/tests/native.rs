@@ -1,7 +1,7 @@
 use super::*;
 use crate::structure_review::{
     code_graph::{AnalysisInput, AnalysisOptions, LanguageAnalyzer},
-    native_languages,
+    codegraph_client::CodeGraphAnalyzer,
 };
 use httpmock::prelude::*;
 
@@ -14,19 +14,9 @@ async fn assert_installed_target(id: PackId, installed: &Path, repository: &Path
         options: AnalysisOptions::default(),
     };
     let graph = tokio::task::spawn_blocking(move || {
-        if id == PackId::Rust {
-            native_languages::RustPackAnalyzer::from_pack(&installed)
-                .unwrap()
-                .analyze(
-                    &input,
-                    std::sync::Arc::new(|| false),
-                    crate::structure_review::code_graph::RustDependencyScope::RepositoryOnly,
-                )
-        } else {
-            native_languages::from_pack(id, &installed)
-                .unwrap()
-                .analyze(&input)
-        }
+        CodeGraphAnalyzer::from_pack(id.slug(), &installed)
+            .unwrap()
+            .analyze(&input)
     })
     .await
     .unwrap()
@@ -66,21 +56,25 @@ async fn unpublished_native_pack_reports_explicit_error() {
     packs.shutdown().await;
 }
 
-/// 新增的无条件导入模块必须在下载前通过清单入口校验，不能等 Node 启动后才失败。
+/// 公共入口必须在下载前通过清单校验；消费者不依赖 helper 私有文件名。
 #[test]
-fn typescript_manifest_requires_syntax_module_on_both_targets() {
+fn manifest_requires_public_cli_and_descriptor_on_both_targets() {
     let id = PackId::TypeScriptJavascript;
     let key = PackKey {
         id,
         version: versions()[&id].clone(),
     };
-    let syntax = "runtime/helper/syntax.mjs";
+    let syntax = "control/codegraph.json";
     for target in ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"] {
         let mut manifest = Manifest {
             schema_version: 1,
             id,
             version: key.version.clone(),
             target: target.into(),
+            engine_version: "0.1.0".into(),
+            protocol: "codegraph.analyzer/1".into(),
+            source_commit: "0".repeat(40),
+            source_dirty: false,
             archive_size: 1,
             archive_sha256: "0".repeat(64),
             files: id
@@ -111,44 +105,31 @@ fn typescript_manifest_requires_syntax_module_on_both_targets() {
 
 /// 所选已迁移归档经过真实下载校验、安装、工厂和 helper 分析后才能宣称安装可用。
 #[tokio::test]
-#[ignore = "需要 NARRANT_NATIVE_PACKS 指向真实构建产物；显式执行且不得静默跳过缺包"]
-async fn real_native_packs_install_and_analyze_through_production_factory() {
+#[ignore = "需要 NARRANT_CODEGRAPH_ARTIFACTS 指向真实构建产物；显式执行且不得静默跳过缺包"]
+async fn real_codegraph_packs_install_and_analyze_through_public_cli() {
     let artifacts =
-        PathBuf::from(std::env::var_os("NARRANT_NATIVE_PACKS").expect("缺少真实原生包目录"));
+        PathBuf::from(std::env::var_os("NARRANT_CODEGRAPH_ARTIFACTS").expect("缺少真实原生包目录"));
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
     } else {
         "aarch64-apple-darwin"
     };
     let server = MockServer::start();
+    super::test_support::serve_artifacts(&server, &artifacts, target);
     let root = tempfile::tempdir().unwrap();
     let packs =
         LanguageSupportPacks::with_origin(root.path().into(), server.base_url(), target.into())
             .unwrap();
-    let language = std::env::var("NARRANT_NATIVE_LANGUAGE").unwrap_or_else(|_| "all".into());
+    let language = std::env::var("NARRANT_CODEGRAPH_LANGUAGE").unwrap_or_else(|_| "all".into());
     assert!(
-        language == "all"
-            || PackId::NATIVE_MIGRATED
-                .iter()
-                .any(|id| id.slug() == language),
+        language == "all" || PackId::SUPPORTED.iter().any(|id| id.slug() == language),
         "未完成或未知的 Native 迁移：{language}"
     );
-    for &id in PackId::NATIVE_MIGRATED
+    for &id in PackId::SUPPORTED
         .iter()
         .filter(|id| language == "all" || id.slug() == language)
     {
         let version = &versions()[&id];
-        let artifact = artifacts.join(id.slug()).join(version).join(target);
-        for name in ["manifest.json", "pack.tar.gz"] {
-            let bytes = fs::read(artifact.join(name)).expect("验收必须具备所选真实支持包");
-            server.mock(|when, then| {
-                when.path(format!(
-                    "/language-pack-{}-v{version}/{target}-{name}",
-                    id.slug()
-                ));
-                then.body(bytes);
-            });
-        }
         let lease = packs
             .ensure(&[id], &CancellationToken::new(), None)
             .await

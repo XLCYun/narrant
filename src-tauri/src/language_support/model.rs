@@ -17,8 +17,8 @@ pub(crate) enum PackId {
 }
 
 impl PackId {
-    /// 只有已接通生产工厂的语言才能进入真实 Native 支持包验收。
-    pub const NATIVE_MIGRATED: &'static [Self] = &[
+    /// 全部七种语言使用同一公共 CLI 消费入口。
+    pub const SUPPORTED: &'static [Self] = &[
         Self::Rust,
         Self::Python,
         Self::TypeScriptJavascript,
@@ -43,81 +43,14 @@ impl PackId {
 
     /// 当前包的必需入口，归档必须提供这些普通文件。
     pub fn required(self, target: &str) -> Vec<&'static str> {
-        let windows = target == "x86_64-pc-windows-msvc";
-        match self {
-            Self::Rust => vec![
-                "control/native.json",
-                "licenses/Rust-dependencies.json",
-                if windows {
-                    "bin/narrant-rust.exe"
-                } else {
-                    "bin/narrant-rust"
-                },
-            ],
-            Self::Java => vec![
-                "control/native.json",
-                if windows {
-                    "runtime/jdk/bin/java.exe"
-                } else {
-                    "runtime/jdk/bin/java"
-                },
-                "runtime/helper/classes/dev/narrant/java/Main.class",
-            ],
-            Self::Go => vec![
-                "control/native.json",
-                if windows {
-                    "bin/narrant-go.exe"
-                } else {
-                    "bin/narrant-go"
-                },
-            ],
-            Self::Csharp => vec![
-                "control/native.json",
-                if windows {
-                    "bin/dotnet.exe"
-                } else {
-                    "bin/dotnet"
-                },
-                "runtime/helper/Narrant.CSharp.Helper.dll",
-                "runtime/helper/Narrant.CSharp.Helper.deps.json",
-                "runtime/helper/Narrant.CSharp.Helper.runtimeconfig.json",
-                "runtime/helper/Microsoft.CodeAnalysis.dll",
-                "runtime/helper/Microsoft.CodeAnalysis.CSharp.dll",
-            ],
-            Self::CCpp => vec![
-                "control/native.json",
-                if windows {
-                    "bin/narrant-clang.exe"
-                } else {
-                    "bin/narrant-clang"
-                },
-            ],
-            Self::Python => vec![
-                if windows {
-                    "bin/narrant-python.exe"
-                } else {
-                    "bin/narrant-python"
-                },
-                "control/native.json",
-                "licenses/Python-dependencies.json",
-                "licenses/ruff-LICENSE",
-                "licenses/typeshed-LICENSE",
-            ],
-            Self::TypeScriptJavascript => vec![
-                if windows { "bin/node.exe" } else { "bin/node" },
-                "control/native.json",
-                "runtime/helper/main.mjs",
-                "runtime/helper/analyze.mjs",
-                "runtime/helper/projection.mjs",
-                "runtime/helper/config.mjs",
-                "runtime/helper/workspace.mjs",
-                "runtime/helper/syntax.mjs",
-                "runtime/typescript/lib/lib.d.ts",
-                "runtime/typescript/lib/typescript.js",
-                "runtime/@types/node/index.d.ts",
-                "runtime/undici-types/index.d.ts",
-            ],
-        }
+        vec![
+            "control/codegraph.json",
+            if target == "x86_64-pc-windows-msvc" {
+                "bin/codegraph.exe"
+            } else {
+                "bin/codegraph"
+            },
+        ]
     }
 }
 
@@ -180,6 +113,10 @@ pub(super) struct Manifest {
     pub id: PackId,
     pub version: String,
     pub target: String,
+    pub engine_version: String,
+    pub protocol: String,
+    pub source_commit: String,
+    pub source_dirty: bool,
     pub archive_size: u64,
     pub archive_sha256: String,
     pub files: Vec<ManifestFile>,
@@ -195,7 +132,7 @@ pub(super) struct ManifestFile {
     pub executable: bool,
 }
 
-/// 从与打包脚本共用的版本表提取应用所要求的精确包版本。
+/// 从消费者目录提取应用所要求的精确包版本。
 pub(super) fn versions() -> BTreeMap<PackId, String> {
     /// 编译时读取共用的包版本目录。
     #[derive(Deserialize)]
@@ -233,5 +170,5 @@ pub(super) fn published(id: PackId) -> bool {
     .expect("编译时语言支持包目录有效");
     catalog["packs"][id.slug()]["published"]
         .as_bool()
-        .unwrap_or(true)
+        .unwrap_or(false)
 }

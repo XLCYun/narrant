@@ -1,7 +1,7 @@
 //! Python 从真实 Git 比较到应用 DTO 的路由、合并与生命周期验收。
 
 use super::*;
-use crate::structure_review::{code_graph::LanguageAnalyzer, native_languages};
+use crate::structure_review::{code_graph::LanguageAnalyzer, codegraph_client::CodeGraphAnalyzer};
 
 /// 用小型真实仓库建立新增、修改与仅删除场景，保留实际 Review 工作区管理。
 async fn fixture(files: &[(&str, &str, Option<&str>)]) -> Fixture {
@@ -83,9 +83,7 @@ async fn native_python_mixed_review_uses_two_shared_workspaces() {
     let typescript = observations.clone();
     let python = observations.clone();
     let pack = std::env::var_os("NARRANT_PYTHON_PACK").expect("真实 Python 包");
-    let analyzer =
-        native_languages::from_pack(crate::language_support::PackId::Python, Path::new(&pack))
-            .unwrap();
+    let analyzer = CodeGraphAnalyzer::from_pack("python", Path::new(&pack)).unwrap();
     let application = StructureReview::new(Arc::new(move |input, _, _| {
         rust.lock()
             .unwrap()
@@ -290,24 +288,18 @@ async fn filtered_python_tests_do_not_prepare_a_support_pack() {
 
 /// 真实优化归档经安装工厂与固定 Git 两侧输出 DTO；语法失败和取消保留生命周期回收。
 #[tokio::test]
-#[ignore = "需要真实 NARRANT_NATIVE_PACKS Python 优化归档"]
+#[ignore = "需要真实 NARRANT_CODEGRAPH_ARTIFACTS Python 优化归档"]
 async fn real_python_pack_flows_through_review_lifecycle_to_dto() {
     use httpmock::prelude::*;
     let artifacts =
-        PathBuf::from(std::env::var_os("NARRANT_NATIVE_PACKS").expect("真实 Python 归档"));
+        PathBuf::from(std::env::var_os("NARRANT_CODEGRAPH_ARTIFACTS").expect("真实 Python 归档"));
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
     } else {
         "aarch64-apple-darwin"
     };
     let server = MockServer::start();
-    for name in ["manifest.json", "pack.tar.gz"] {
-        let bytes = std::fs::read(artifacts.join("python/1.1.0").join(target).join(name)).unwrap();
-        server.mock(|when, then| {
-            when.path(format!("/language-pack-python-v1.1.0/{target}-{name}"));
-            then.body(bytes);
-        });
-    }
+    crate::language_support::test_support::serve_artifacts(&server, &artifacts, target);
     for invalid in [false, true] {
         let fixture = fixture(&[
             (
@@ -344,7 +336,7 @@ async fn real_python_pack_flows_through_review_lifecycle_to_dto() {
         if invalid {
             let error = result.unwrap_err();
             assert_eq!(error.code, "analysis-failed");
-            assert!(error.detail.contains("语法"), "{}", error.detail);
+            assert!(error.detail.contains("analysis_failed"), "{}", error.detail);
         } else {
             let result = result.unwrap();
             let run = result
@@ -413,7 +405,7 @@ async fn real_python_pack_flows_through_review_lifecycle_to_dto() {
         assert_eq!(error.code, "cancelled");
         assert!(!fixture.head.parent().unwrap().join("before").exists());
         packs
-            .remove(crate::language_support::PackId::Python, "1.1.0")
+            .remove(crate::language_support::PackId::Python, "0.1.0")
             .unwrap();
         packs.shutdown().await;
     }

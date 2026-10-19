@@ -4,6 +4,14 @@ status: accepted
 
 # Rust Language Analyzer
 
+> 2026-10-19 实现归属更新：[0027](0027-independent-codegraph-project.md) 与
+> [ADR-0037](../adr/0037-extract-codegraph-behind-one-cli.md) 将图生成、原生 helper、Host、SDK
+> 发现与发布迁入 [CodeGraph](https://github.com/XLCYun/CodeGraph)。本规范的语言语义仍有效，
+> 旧 Native Host 协议现在是其私有实现；Narrant 只消费公共 CLI，保留安装、租约、diff 与 Review。
+> 当前命令与验收归属见 [支持包说明](../language-support-packs.md) 和
+> [消费验收映射](../codegraph-consumer-acceptance.md)。下文有日期的历史结果保留原义，不代表新 CLI 已发布或已通过 CI。
+
+
 Implement Rust's `LanguageAnalyzer` using rust-analyzer, producing the existing
 Code Graph for one prepared repository state and a caller-selected set of files.
 The user selected rust-analyzer on 2026-09-11 after a local executable spike.
@@ -27,7 +35,7 @@ or rust-src installation remain disabled.
 The unpublished 1.1.0 pack candidate has passed local macOS ARM64 checks and the final
 GitHub-hosted macOS ARM64 / Windows x64 helper, graph, installation and Review gates. See
 [implementation evidence](../research/existing-native-helper-migration-validation.md) and
-[helper boundaries](../../native-helpers/rust/README.md). The server initialization,
+[helper boundaries](https://github.com/XLCYun/CodeGraph/blob/main/native-helpers/rust/README.md). The server initialization,
 readiness, UTF-16 transport and executable descriptions below preserve the dated original
 design/experiments; they no longer describe production. Business mapping and option
 requirements remain binding unless 0025 explicitly replaces an implementation detail.

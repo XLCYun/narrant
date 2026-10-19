@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "diffTests": [
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_compares_prepared_repositories",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_keeps_closure_references_without_closure_nodes",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_resolves_graph_local_field_types",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_omits_non_field_type_uses_and_data_accesses",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_preserves_crate_roots",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_excludes_test_code_before_graph_analysis",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_all_dependency_profiles_use_real_project_platform",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_syntax_diff_nested_items_in_type_expressions",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_syntax_diff_preserves_literal_contents",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_syntax_diff_preserves_usage_but_ignores_item_order",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_syntax_diff_top_level_macro_arguments",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_syntax_diff_macro_punctuation_jointness",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_syntax_diff_excludes_nested_tests_under_glob_imports",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_syntax_diff_excludes_nested_test_edits",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_graph.rs",
+      "test": "rust_helper_whole_graph_project_form_matrix",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "preserves_original_source_without_changing_structural_comparison",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "nested_body_edits_belong_only_to_their_owner",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "closures_are_code_of_their_enclosing_function_or_value",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "named_items_inside_closures_keep_their_own_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "adding_fields_does_not_modify_the_type_own_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "nested_items_in_type_expressions_have_separate_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "normalization_preserves_literal_contents",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "preserves_child_expression_usage_but_ignores_item_order",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "top_level_macro_invocations_have_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "macro_punctuation_jointness_is_significant",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/rust_syntax.rs",
+      "test": "unicode_and_crlf_keep_precise_source_and_stable_identity",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_syntax.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/python_graph.rs",
+      "test": "function_body_change_belongs_to_callable",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/python_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/python_graph.rs",
+      "test": "class_method_body_and_local_class_do_not_change_parent_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/python_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/python_graph.rs",
+      "test": "conditional_declarations_preserve_execution_order_without_copying_child_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/python_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/python_graph.rs",
+      "test": "fields_deduplicate_receiver_bindings_without_stealing_method_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/python_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/python_graph.rs",
+      "test": "normalization_and_field_order_distinguish_semantic_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/python_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/python_graph.rs",
+      "test": "shared_initializers_and_repeated_fields_are_not_duplicated",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/python_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_analyzer/tests/python_native.rs",
+      "test": "native_overload_docstrings_participate_in_content_comparison",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/python_native.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_languages/tests/typescript_graph.rs",
+      "test": "graph_test_membership_lazy_context_and_stable_external_symbols",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/typescript_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_languages/tests/typescript_graph.rs",
+      "test": "graph_diff_format_child_parent_and_inline_callback",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/typescript_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_languages/tests/typescript_graph.rs",
+      "test": "graph_dynamic_unknown_names_ignore_format_but_preserve_literal_values",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/typescript_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_languages/tests/typescript_graph.rs",
+      "test": "typescript_jsx_leading_and_space_only_text_changes_graph_content",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/typescript_graph.rs"
+    },
+    {
+      "old": "src-tauri/src/structure_review/native_languages/rust/tests/production.rs",
+      "test": "production_profiles_keep_graph_policy_and_readonly_project",
+      "new": "src-tauri/src/structure_review/codegraph_client/tests/rust_production.rs"
+    }
+  ]
+}

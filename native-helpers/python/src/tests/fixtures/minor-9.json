@@ -1,6 +1,0 @@
-[
-  [
-    "class Box:",
-    "class Box:\n    field: list[int] = []"
-  ]
-]

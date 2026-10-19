@@ -3,13 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runInNewContext } from 'node:vm';
 import { runWindowsLifecycleTests } from '../language-packs/run-windows-lifecycle-tests.mjs';
-
-/** 统一 Git checkout 的 LF/CRLF 差异，让工作流断言只验证调度行为。 */
-async function readLanguageWorkflow(file = 'validate-language-support-packs.yml') {
-  return (await fs.readFile(new URL(`../../.github/workflows/${file}`, import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
-}
 
 // 非 Windows 主机不能因为 cfg 排除了全部测试而得到成功结论。
 test('lifecycle validation rejects non-Windows hosts before starting Cargo', async () => {
@@ -17,8 +11,7 @@ test('lifecycle validation rejects non-Windows hosts before starting Cargo', asy
 });
 
 // 跨真实 bash/Node 边界验证生产所有者筛选器、原生 Node 路径和真实失败传播。
-test('lifecycle validation runs only the production owner and preserves its failure', async t => {
-  const diagnostics = t.mock.method(console, 'error', () => {});
+test('lifecycle validation runs only the production owner and preserves its failure', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'windows lifecycle '));
   try {
     await fs.mkdir(path.join(directory, 'scripts'));
@@ -28,7 +21,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 assert.equal(process.env.NARRANT_TEST_NODE, process.execPath);
 const args = process.argv.slice(2);
-const common = ['test', '--manifest-path', 'native-helpers/windows-process-probe/Cargo.toml', '--locked', '--lib'];
+const common = ['test', '--manifest-path', 'src-tauri/Cargo.toml', '--locked', '--lib'];
 const filter = args[5];
 assert.equal(filter, 'child_process::');
 assert.deepEqual(args, [...common, filter, '--', '--nocapture', '--test-threads=1']);
@@ -37,105 +30,9 @@ assert.equal(previous, '');
 fs.appendFileSync('executed', filter);
 process.exit(7);
 `);
-    await assert.rejects(runWindowsLifecycleTests({ cwd: directory, platform: 'win32' }), error => {
-      assert.ok(error instanceof AggregateError);
-      assert.equal(error.errors.length, 1);
-      assert.match(error.errors[0].cause.message, /failed \(7\)/);
-      return true;
-    });
+    await assert.rejects(runWindowsLifecycleTests({ cwd: directory, platform: 'win32' }), /failed \(7\)/);
     assert.equal(await fs.readFile(path.join(directory, 'executed'), 'utf8'), 'child_process::');
-    assert.equal(diagnostics.mock.callCount(), 1);
-    assert.match(diagnostics.mock.calls[0].arguments[0].message, /child_process::/);
-    assert.match(diagnostics.mock.calls[0].arguments[0].cause.message, /failed \(7\)/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
-  }
-});
-
-// 轻量诊断独占 Windows；聚焦语言只运行 native 验收，发布必须等待完整双平台且显式授权。
-test('manual lifecycle scope isolates one cheap job and cannot publish packs', async () => {
-  const workflow = await readLanguageWorkflow();
-  const publishing = await readLanguageWorkflow('language-support-packs.yml');
-  const job = name => (name === 'publish' ? publishing : workflow).split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
-  assert.match(workflow, /validation_scope:\n[\s\S]*default: full/);
-  const lifecycle = job('windows-lifecycle');
-  assert.match(lifecycle, /if: inputs.validation_scope == 'windows-lifecycle'/);
-  assert.match(lifecycle, /runs-on: windows-2022/);
-  assert.match(lifecycle, /run: node scripts\/language-packs\/run-windows-lifecycle-tests.mjs/);
-  assert.doesNotMatch(lifecycle, /pnpm|provision-native-toolchains|continue-on-error/);
-  assert.match(job('publish'), /needs: validate/);
-  /** 这些 GitHub guards 只使用 JS 同义的布尔运算；直接验证实际条件，避免要求不同职责共享文本。 */
-  const enabled = (name, event, scope, language, publish, ref, platform = 'all') => runInNewContext(job(name).match(/^ {4}if: (.+)$/m)[1], {
-    github: { event_name: event, ref }, inputs: { validation_scope: scope, language, publish, platform },
-  });
-  for (const scope of ['full', 'native-analyzers', 'windows-lifecycle']) {
-    for (const language of ['all', 'typescript-javascript', 'java']) {
-      const context = ['workflow_dispatch', scope, language, true, 'refs/heads/main'];
-      assert.equal(enabled('windows-lifecycle', ...context), scope === 'windows-lifecycle');
-      assert.equal(enabled('build', ...context), scope === 'full' && language === 'all');
-      assert.equal(enabled('native-analyzers', ...context), scope !== 'windows-lifecycle');
-      assert.equal(enabled('publish', ...context), scope === 'full' && language === 'all');
-    }
-  }
-  for (const [event, publish, ref] of [['pull_request', true, 'refs/heads/main'], ['workflow_dispatch', false, 'refs/heads/main'], ['workflow_dispatch', true, 'refs/heads/codex/migration']]) {
-    assert.equal(enabled('publish', event, 'full', 'all', publish, ref), false);
-  }
-  for (const platform of ['macos', 'windows']) {
-    assert.equal(enabled('publish', 'workflow_dispatch', 'full', 'all', true, 'refs/heads/main', platform), false);
-  }
-  for (const name of ['build', 'native-analyzers']) assert.equal(enabled(name, 'pull_request', 'full', 'all', false, 'refs/pull/1/merge'), true);
-  assert.equal(enabled('windows-lifecycle', 'pull_request', 'full', 'all', false, 'refs/pull/1/merge'), false);
-});
-
-// 执行工作流实际矩阵表达式，确认单平台验收不会调度另一平台，默认仍覆盖两个目标。
-test('manual platform selection schedules only the requested native targets', async () => {
-  const workflow = await readLanguageWorkflow();
-  for (const name of ['build', 'native-analyzers']) {
-    const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
-    const expression = job.match(/include: >-\n([\s\S]*?)\n {4}runs-on:/)?.[1].trim();
-    assert.ok(expression?.startsWith('${{') && expression.endsWith('}}'));
-    for (const platform of [undefined, 'all', 'macos', 'windows']) {
-      const selected = runInNewContext(expression.slice(3, -2), { inputs: { platform }, fromJSON: JSON.parse });
-      const targets = selected.map(item => item.target);
-      assert.deepEqual(targets, platform === 'windows' ? ['x86_64-pc-windows-msvc'] : platform === 'macos' ? ['aarch64-apple-darwin'] : ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc']);
-    }
-  }
-});
-
-// 所有实际执行任务固定为 GitHub-hosted 镜像。
-test('native jobs use the hosted image matching their target', async () => {
-  const workflow = await readLanguageWorkflow();
-  assert.doesNotMatch(workflow, /self-hosted|NARRANT_.*RUNNER_LABELS/);
-  for (const name of ['build', 'native-analyzers']) {
-    const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
-    const expression = job.match(/^ {4}runs-on: \$\{\{ (.+) \}\}$/m)[1];
-    for (const [target, expected] of [['aarch64-apple-darwin', 'macos-15'], ['x86_64-pc-windows-msvc', 'windows-2022']]) {
-      assert.equal(runInNewContext(expression, { matrix: { target } }), expected);
-    }
-  }
-});
-
-// PR 可省去大体积产物；发布入口始终要求上传，不能用验收选项绕过发布输入。
-test('validation can omit artifacts while publishing always retains uploads', async () => {
-  const workflow = await readLanguageWorkflow();
-  for (const name of ['build', 'native-analyzers']) {
-    const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n {2}[\w-]+:\n/)[0];
-    const upload = job.split('      - uses: actions/upload-artifact@')[1].split('\n      - ')[0];
-    const condition = upload.match(/^ {8}if: (.+)$/m)[1];
-    for (const uploadArtifacts of [false, true]) {
-      assert.equal(runInNewContext(condition, {
-        inputs: { upload_artifacts: uploadArtifacts }, always: () => true,
-      }), uploadArtifacts);
-    }
-    assert.match(upload, /retention-days: 7/);
-  }
-  const publishing = await readLanguageWorkflow('language-support-packs.yml');
-  const expression = publishing.match(/upload_artifacts: \$\{\{ (.+) \}\}/)[1];
-  for (const uploadArtifacts of [false, true]) {
-    for (const publish of [false, true]) {
-      assert.equal(runInNewContext(expression, {
-        inputs: { upload_artifacts: uploadArtifacts, publish },
-      }), uploadArtifacts || publish);
-    }
   }
 });

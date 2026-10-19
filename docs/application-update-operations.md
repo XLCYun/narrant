@@ -1,6 +1,6 @@
 # Application Update 发布运维
 
-源码、Release、应用更新和语言支持包统一在 `XLCYun/narrant`。生产 Stable 入口：
+Narrant 源码、Release 和应用更新位于 `XLCYun/narrant`；语言包固定消费 `XLCYun/CodeGraph`，见 [支持包说明](language-support-packs.md)。生产 Stable 入口：
 
 ```text
 https://github.com/XLCYun/narrant/releases/latest/download/latest.json

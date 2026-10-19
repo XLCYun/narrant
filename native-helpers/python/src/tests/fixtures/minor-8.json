@@ -1,6 +1,0 @@
-[
-  [
-    "def f(xs):",
-    "def f(xs):\n    return [y for x in xs if (y := x)]"
-  ]
-]

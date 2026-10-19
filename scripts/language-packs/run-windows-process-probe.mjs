@@ -12,10 +12,10 @@ export async function runWindowsProcessProbe({ cwd = repository, platform = proc
   const exists = (await stat(node)).isFile();
   console.log(`[windows-process-probe-launch] ${JSON.stringify({ node, absolute: path.isAbsolute(node), exists })}`);
   if (!path.isAbsolute(node) || !exists) throw new Error('Current Node executable must be an existing absolute file');
-  const child = spawn('bash', ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'native-helpers/windows-process-probe/Cargo.toml', '--locked', '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'], {
+  const child = spawn('bash', ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--locked', '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1'], {
     cwd,
     stdio: 'inherit',
-    env: { ...process.env, NARRANT_TEST_NODE: node },
+    env: { ...process.env, NARRANT_TEST_NODE: node, NARRANT_WINDOWS_TEST_MANIFEST: '1' },
   });
   return await new Promise((resolve, reject) => {
     child.once('error', reject);

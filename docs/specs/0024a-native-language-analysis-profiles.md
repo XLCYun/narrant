@@ -4,6 +4,14 @@ status: accepted
 
 # 原生语言分析配置与验收
 
+> 2026-10-19 实现归属更新：[0027](0027-independent-codegraph-project.md) 与
+> [ADR-0037](../adr/0037-extract-codegraph-behind-one-cli.md) 将图生成、原生 helper、Host、SDK
+> 发现与发布迁入 [CodeGraph](https://github.com/XLCYun/CodeGraph)。本规范的语言语义仍有效，
+> 旧 Native Host 协议现在是其私有实现；Narrant 只消费公共 CLI，保留安装、租约、diff 与 Review。
+> 当前命令与验收归属见 [支持包说明](../language-support-packs.md) 和
+> [消费验收映射](../codegraph-consumer-acceptance.md)。下文有日期的历史结果保留原义，不代表新 CLI 已发布或已通过 CI。
+
+
 本文细化 [0024 通用辅助进程协议](0024-native-analyzer-helper-protocol.md) 的语言配置、
 源码映射和验收输入。共同架构和单图并集语义已经由
 [ADR-0034](../adr/0034-use-native-analyzer-helpers-for-new-languages.md) 确认；

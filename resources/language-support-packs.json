@@ -1,108 +1,37 @@
 {
   "schemaVersion": 1,
+  "repository": "XLCYun/CodeGraph",
+  "tag": "v0.1.0",
+  "engineVersion": "0.1.0",
+  "protocol": "codegraph.analyzer/1",
   "packs": {
     "rust": {
-      "version": "1.1.0",
-      "published": false,
-      "sourceCommit": "9074e9b4c6bc31d7986ccf4e22d18af70e5508da",
-      "helperVersion": "0.1.0",
-      "helperId": "narrant-rust",
-      "projectionRevision": "rust-source-v1",
-      "profile": "rust-repository-v1",
-      "buildToolchain": "1.98.0",
-      "targetStandardLibrary": "local-project-rust-sysroot",
-      "verifiedTargets": []
+      "version": "0.1.0",
+      "published": false
     },
     "typescript-javascript": {
-      "version": "1.1.0",
-      "node": "24.18.0",
-      "upstreamSha256": {
-        "aarch64-apple-darwin": "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1",
-        "x86_64-pc-windows-msvc": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821"
-      },
-      "packages": [
-        {
-          "name": "typescript",
-          "version": "6.0.3",
-          "integrity": "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="
-        },
-        {
-          "name": "@types/node",
-          "version": "22.20.1",
-          "integrity": "sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q=="
-        },
-        {
-          "name": "undici-types",
-          "version": "6.21.0",
-          "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="
-        }
-      ],
-      "published": false,
-      "helperVersion": "0.1.0",
-      "helperId": "narrant-typescript",
-      "projectionRevision": "typescript-source-v1",
-      "profile": "typescript-static-v1",
-      "verifiedTargets": []
+      "version": "0.1.0",
+      "published": false
     },
     "python": {
-      "version": "1.1.0",
-      "ty": "0.0.84",
-      "sourceCommit": "11aaa39f84c0c44bdfb4c9cc21e4038c6f74c00a",
-      "published": false,
-      "helperVersion": "0.1.0",
-      "helperId": "narrant-python",
-      "projectionRevision": "python-source-v1",
-      "profile": "python-static-v1",
-      "buildToolchain": "1.98.0",
-      "targetStandardLibrary": "embedded-typeshed",
-      "verifiedTargets": []
+      "version": "0.1.0",
+      "published": false
     },
     "java": {
       "version": "0.1.0",
-      "published": false,
-      "helperVersion": "0.1.0",
-      "helperId": "narrant-java",
-      "projectionRevision": "java-source-v1",
-      "profile": "java-static-v1",
-      "verifiedTargets": [],
-      "jdt": "3.47.0",
-      "runtimeJava": "25.0.4.1+1",
-      "targetStandardLibrary": "local-java-jdks"
+      "published": false
     },
     "go": {
       "version": "0.1.0",
-      "published": false,
-      "helperVersion": "0.1.0",
-      "helperId": "narrant-go",
-      "projectionRevision": "go-source-v1",
-      "profile": "go-static-v1",
-      "verifiedTargets": [],
-      "go": "1.27.1",
-      "targetStandardLibrary": "local-go-sdks"
+      "published": false
     },
     "csharp": {
       "version": "0.1.0",
-      "published": false,
-      "helperVersion": "0.1.0",
-      "helperId": "narrant-csharp",
-      "projectionRevision": "csharp-source-v1",
-      "profile": "csharp-static-v1",
-      "verifiedTargets": [],
-      "dotnetSdk": "10.0.100",
-      "dotnetRuntime": "10.0.0",
-      "referencePack": "Microsoft.NETCore.App.Ref",
-      "targetStandardLibrary": "local-dotnet-reference-packs"
+      "published": false
     },
     "c-cpp": {
       "version": "0.1.0",
-      "published": false,
-      "helperVersion": "0.1.0",
-      "helperId": "narrant-clang",
-      "projectionRevision": "clang-source-v1",
-      "profile": "clang-static-v1",
-      "verifiedTargets": [],
-      "llvm": "21.1.8",
-      "targetSdk": "local-approved-system-sdk"
+      "published": false
     }
   }
 }

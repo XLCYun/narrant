@@ -4,7 +4,7 @@ mod projection;
 mod workspace;
 
 use super::code_graph::{AnalysisError, AnalysisInput, AnalysisOptions, CodeGraph, CodeRoot};
-use super::{code_graph::RustDependencyScope, native_analyzer::CancellationCheck};
+use super::{code_graph::RustDependencyScope, codegraph_client::CancellationCheck};
 use crate::{
     language_support::{PackId, PackLease},
     operation::OperationContext,
@@ -164,7 +164,7 @@ impl StructureReview {
                             ids.insert(PackId::Rust);
                         }
                         Some(LanguageGroup::TypeScript)
-                            if super::native_languages::typescript_needs_tools(
+                            if super::codegraph_client::typescript_needs_tools(
                                 std::path::Path::new(path),
                                 options,
                             ) =>
@@ -172,7 +172,7 @@ impl StructureReview {
                             ids.insert(PackId::TypeScriptJavascript);
                         }
                         Some(LanguageGroup::Python)
-                            if super::native_languages::python_needs_tools(
+                            if super::codegraph_client::python_needs_tools(
                                 std::path::Path::new(path),
                                 options,
                             ) =>
@@ -207,28 +207,35 @@ impl StructureReview {
                     failure
                 })?;
             if let Some(root) = lease.path(PackId::Rust) {
-                let analyzer = super::native_languages::RustPackAnalyzer::from_pack(root)
+                let analyzer = super::codegraph_client::CodeGraphAnalyzer::from_pack("rust", root)
                     .map_err(analysis_error)?;
                 analyzers.rust = Arc::new(move |input, cancelled, scope| {
-                    analyzer.analyze(input, cancelled, scope)
+                    analyzer
+                        .clone()
+                        .with_cancellation(cancelled)
+                        .with_dependency_scope(scope)
+                        .analyze(input)
                 });
             }
             if let Some(root) = lease.path(PackId::TypeScriptJavascript) {
-                let analyzer =
-                    super::native_languages::from_pack(PackId::TypeScriptJavascript, root)
-                        .map_err(analysis_error)?;
+                let analyzer = super::codegraph_client::CodeGraphAnalyzer::from_pack(
+                    "typescript-javascript",
+                    root,
+                )
+                .map_err(analysis_error)?;
                 analyzers.typescript = Arc::new(move |input, cancelled| {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
             }
             if let Some(root) = lease.path(PackId::Python) {
-                let analyzer = super::native_languages::from_pack(PackId::Python, root)
-                    .map_err(analysis_error)?;
+                let analyzer =
+                    super::codegraph_client::CodeGraphAnalyzer::from_pack("python", root)
+                        .map_err(analysis_error)?;
                 analyzers.python = Arc::new(move |input, cancelled| {
                     analyzer.clone().with_cancellation(cancelled).analyze(input)
                 });
             }
-            for &id in PackId::NATIVE_MIGRATED.iter().filter(|id| {
+            for &id in PackId::SUPPORTED.iter().filter(|id| {
                 !matches!(
                     id,
                     PackId::TypeScriptJavascript | PackId::Rust | PackId::Python
@@ -236,7 +243,8 @@ impl StructureReview {
             }) {
                 if let Some(root) = lease.path(id) {
                     let analyzer =
-                        super::native_languages::from_pack(id, root).map_err(analysis_error)?;
+                        super::codegraph_client::CodeGraphAnalyzer::from_pack(id.slug(), root)
+                            .map_err(analysis_error)?;
                     analyzers.native.insert(
                         id,
                         Arc::new(move |input, cancelled, _scope| {
@@ -438,7 +446,7 @@ fn analyze_side(
     let typescript_input = files
         .typescript
         .iter()
-        .any(|path| super::native_languages::typescript_needs_tools(path, options))
+        .any(|path| super::codegraph_client::typescript_needs_tools(path, options))
         .then(|| AnalysisInput {
             repository_root: repository.to_owned(),
             files: files.typescript,
@@ -447,7 +455,7 @@ fn analyze_side(
     let python_input = files
         .python
         .iter()
-        .any(|path| super::native_languages::python_needs_tools(path, options))
+        .any(|path| super::codegraph_client::python_needs_tools(path, options))
         .then(|| AnalysisInput {
             repository_root: repository.to_owned(),
             files: files.python,

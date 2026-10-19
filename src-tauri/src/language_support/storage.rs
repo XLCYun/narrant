@@ -127,6 +127,8 @@ impl Storage {
                 return Err("语言支持包文件路径越界".into());
             }
         }
+        crate::structure_review::codegraph_client::validate_descriptor(key.id.slug(), &root)
+            .map_err(error)?;
         Ok(manifest)
     }
 
@@ -177,6 +179,11 @@ impl Storage {
             if entry.size() != file.size {
                 return Err("归档文件大小不匹配".into());
             }
+            if entry.header().mode().map_err(error)? & 0o777
+                != if file.executable { 0o755 } else { 0o644 }
+            {
+                return Err("归档文件权限与清单不匹配".into());
+            }
             let path = payload.join(relative);
             fs::create_dir_all(path.parent().ok_or("归档路径无效")?).map_err(error)?;
             let mut output = File::create(&path).map_err(error)?;
@@ -212,6 +219,8 @@ impl Storage {
         if seen.len() != expected.len() {
             return Err("语言支持包归档缺少文件".into());
         }
+        crate::structure_review::codegraph_client::validate_descriptor(key.id.slug(), &payload)
+            .map_err(error)?;
         let mut marker = File::create(payload.join("installed.json")).map_err(error)?;
         marker
             .write_all(&serde_json::to_vec(manifest).map_err(error)?)
@@ -241,6 +250,15 @@ pub(super) fn validate_manifest(
         || manifest.id != key.id
         || manifest.version != key.version
         || manifest.target != target
+        || manifest.engine_version != crate::structure_review::codegraph_client::ENGINE_VERSION
+        || manifest.protocol != crate::structure_review::codegraph_client::PROTOCOL
+        || manifest.version != manifest.engine_version
+        || manifest.source_dirty
+        || manifest.source_commit.len() != 40
+        || !manifest
+            .source_commit
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         || manifest.archive_size == 0
         || manifest.archive_size > MAX_ARCHIVE
         || !valid_hash(&manifest.archive_sha256)
@@ -272,13 +290,9 @@ pub(super) fn validate_manifest(
         return Err("语言支持包缺少必需入口".into());
     }
     if manifest.files.iter().any(|file| {
-        (file.path.starts_with("bin/")
-            || (key.id == PackId::Java
-                && (file.path == "runtime/jdk/bin/java"
-                    || file.path == "runtime/jdk/bin/java.exe")))
-            && !file.executable
+        (file.path == "bin/codegraph" || file.path == "bin/codegraph.exe") && !file.executable
     }) {
-        return Err("语言支持包工具权限或固定控制文件无效".into());
+        return Err("CodeGraph CLI 必须可执行".into());
     }
     Ok(())
 }

@@ -1,5 +1,13 @@
 # Language Support Packs（语言支持包）
 
+> 2026-10-19 实现归属更新：[0027](0027-independent-codegraph-project.md) 与
+> [ADR-0037](../adr/0037-extract-codegraph-behind-one-cli.md) 将图生成、原生 helper、Host、SDK
+> 发现与发布迁入 [CodeGraph](https://github.com/XLCYun/CodeGraph)。本规范的语言语义仍有效，
+> 旧 Native Host 协议现在是其私有实现；Narrant 只消费公共 CLI，保留安装、租约、diff 与 Review。
+> 当前命令与验收归属见 [支持包说明](../language-support-packs.md) 和
+> [消费验收映射](../codegraph-consumer-acceptance.md)。下文有日期的历史结果保留原义，不代表新 CLI 已发布或已通过 CI。
+
+
 Status: Accepted — the user confirmed the consolidated design and requested
 implementation on the isolated worktree, followed by a Pull Request targeting main.
 
@@ -12,7 +20,7 @@ Rust/Python/TS-JS 的 1.1.0 候选分别包含 `narrant-rust`、内嵌 typeshed 
 TS 分发删除 tsserver/typingsInstaller/watchGuard，保留固定标准声明闭包及 Node/依赖许可。
 Rust/Python 的独立锁文件固定同批原生库，正常构建收集实际目标 Cargo 许可闭包。
 Python 少数确切版本的 MIT 声明附上标明来源的标准条款；seahash 上游通知未取回的
-边界见 [来源记录](../../native-helpers/python/licenses/sources.json)，不能声称通知完整。
+边界见 [来源记录](https://github.com/XLCYun/CodeGraph/blob/main/native-helpers/python/licenses/sources.json)，不能声称通知完整。
 Host Cargo 与应用 pnpm 锁不再含旧直接 parser/server 依赖；其他实际消费者的共享依赖保留。
 
 三种迁移语言本地 macOS 验收通过，最终 Windows x64 和七套双平台 CI 尚待完成；catalog
@@ -242,11 +250,11 @@ TS/JS 不安装项目依赖，Rust 保留既有依赖范围策略，但不得安
 
 ## 实现入口
 
-- `resources/language-support-packs.json` 是应用与打包脚本共用的精确版本表。
+- `resources/language-support-packs.json` 是Narrant 消费已验证 CodeGraph 的精确版本表。
 - `src-tauri/src/language_support/` 管理共享任务、安装提交、使用租约与清理。
 - `src/language-support/use-language-support-packs.ts` 是应用级唯一轮询器。
-- `scripts/language-packs/build-language-support-packs.mjs` 生成四个产物；独立 workflow 原生执行工具，
-  发布脚本先验证归档再公开清单，并验证用户访问的 HTTPS 地址。
+- `scripts/codegraph/download-packs.mjs` 下载固定七包，`verify-consumer.mjs` 执行消费验收；
+  构建和发布归 CodeGraph 自身流水线。
 - [构建和发布操作说明](../language-support-packs.md) 记录首次上线条件、版本升级与回退。
 
 ## 实现验收记录
