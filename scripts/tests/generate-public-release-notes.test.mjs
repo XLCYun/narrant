@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { generatePublicReleaseNotes } from "../generate-public-release-notes.mjs";
+import { generatePublicReleaseNotes } from "../release/generate-public-release-notes.mjs";
 
 /** 创建只返回 tag 列表与 commit subjects 的内存 git/write adapters。 */
 function releaseNotesAdapters(subjects) {

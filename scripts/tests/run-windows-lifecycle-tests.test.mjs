@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { runWindowsLifecycleTests } from '../run-windows-lifecycle-tests.mjs';
+import { runWindowsLifecycleTests } from '../language-packs/run-windows-lifecycle-tests.mjs';
 
 /** 统一 Git checkout 的 LF/CRLF 差异，让工作流断言只验证调度行为。 */
 async function readLanguageWorkflow(file = 'validate-language-support-packs.yml') {
@@ -61,7 +61,7 @@ test('manual lifecycle scope isolates one cheap job and cannot publish packs', a
   const lifecycle = job('windows-lifecycle');
   assert.match(lifecycle, /if: inputs.validation_scope == 'windows-lifecycle'/);
   assert.match(lifecycle, /runs-on: windows-2022/);
-  assert.match(lifecycle, /run: node scripts\/run-windows-lifecycle-tests.mjs/);
+  assert.match(lifecycle, /run: node scripts\/language-packs\/run-windows-lifecycle-tests.mjs/);
   assert.doesNotMatch(lifecycle, /pnpm|provision-native-toolchains|continue-on-error/);
   assert.match(job('publish'), /needs: validate/);
   /** 这些 GitHub guards 只使用 JS 同义的布尔运算；直接验证实际条件，避免要求不同职责共享文本。 */

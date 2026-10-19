@@ -5,7 +5,7 @@ import { URL } from "node:url";
 
 const workflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
 const reconciliation = readFileSync(
-  new URL("../reconcile-draft-release.mjs", import.meta.url),
+  new URL("../release/reconcile-draft-release.mjs", import.meta.url),
   "utf8",
 );
 const endpoint = "https://github.com/XLCYun/narrant/releases/latest/download/latest.json";
@@ -82,9 +82,9 @@ test("同仓库 Draft 使用 workflow token，且完整本地预验严格早于�
   assert.match(workflow, /TARGET_REPOSITORY: XLCYun\/narrant/);
   const draft = workflow.slice(workflow.indexOf("\n  draft-release:"));
   const install = draft.indexOf("pnpm install --frozen-lockfile --prod");
-  const notes = draft.indexOf("node scripts/generate-public-release-notes.mjs");
-  const prepare = workflow.indexOf("node scripts/prepare-draft-assets.mjs");
-  const reconcile = workflow.indexOf("node scripts/reconcile-draft-release.mjs");
+  const notes = draft.indexOf("node scripts/release/generate-public-release-notes.mjs");
+  const prepare = workflow.indexOf("node scripts/release/prepare-draft-assets.mjs");
+  const reconcile = workflow.indexOf("node scripts/release/reconcile-draft-release.mjs");
   assert.match(draft, /pnpm\/action-setup@v4/);
   assert.ok(install > 0);
   assert.ok(install < notes);

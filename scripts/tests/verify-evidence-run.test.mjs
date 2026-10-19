@@ -6,7 +6,7 @@ import {
   validateEvidenceArtifacts,
   validateEvidenceWorkflowRun,
   verifyEvidenceRun,
-} from "../verify-evidence-run.mjs";
+} from "../release/verify-evidence-run.mjs";
 
 const expected = {
   runId: 42,

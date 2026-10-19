@@ -112,7 +112,7 @@ jobs:
         run: |
           set -euo pipefail
           trusted_workflow_sha="$(git rev-parse HEAD)"
-          node scripts/verify-evidence-run.mjs \
+          node scripts/release/verify-evidence-run.mjs \
             "$EVIDENCE_RUN_ID" "$PUBLIC_TAG" "$SOURCE_SHA" \
             "$DEFAULT_BRANCH" "$trusted_workflow_sha"
       - name: Download the exact aggregate evidence artifact from the workflow run
@@ -174,4 +174,4 @@ jobs:
           if [[ "$MODE" == normal ]]; then
             args+=(--previous-tag "$PREVIOUS_TAG" --previous-manifest-sha256 "$PREVIOUS_MANIFEST_SHA256")
           fi
-          node scripts/promote-stable-release.mjs "${args[@]}"
+          node scripts/release/promote-stable-release.mjs "${args[@]}"

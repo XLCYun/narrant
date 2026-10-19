@@ -6,13 +6,13 @@ import { join } from "node:path";
 import process from "node:process";
 import test from "node:test";
 
-import { buildTemporaryHostsBytes, createUpdateSmokeTlsSystemAdapter, tlsTrustCommandPlan } from "../update-smoke-tls-system-adapter.mjs";
+import { buildTemporaryHostsBytes, createUpdateSmokeTlsSystemAdapter, tlsTrustCommandPlan } from "../update-smoke/update-smoke-tls-system-adapter.mjs";
 import {
   combineGateErrors,
   createCandidateGateRoutes,
   validateGateConfiguration,
   withUpdateSmokeTlsGate,
-} from "../update-smoke-tls-gate.mjs";
+} from "../update-smoke/update-smoke-tls-gate.mjs";
 
 const endpoint = "https://github.com/XLCYun/narrant/releases/latest/download/latest.json";
 

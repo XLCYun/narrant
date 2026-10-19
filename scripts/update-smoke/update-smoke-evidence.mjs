@@ -5,8 +5,8 @@ import { join } from "node:path";
 import process from "node:process";
 import { pathToFileURL, URL } from "node:url";
 
-import { assertSameDraftReceipt, expectedDraftAssetNames } from "./public-draft-assets.mjs";
-import { resolvePreviousReleaseSigningKeySha256 } from "./release-assets.mjs";
+import { assertSameDraftReceipt, expectedDraftAssetNames } from "../release/public-draft-assets.mjs";
+import { resolvePreviousReleaseSigningKeySha256 } from "../release/release-assets.mjs";
 
 export const REQUIRED_UPDATE_TARGETS = Object.freeze([
   "darwin-aarch64",

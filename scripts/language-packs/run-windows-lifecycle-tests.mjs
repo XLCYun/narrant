@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runVerificationCommands } from './verify-native-analyzers.mjs';
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 /** 同源轻量 crate 验收真实 Windows 行为；拒绝其他平台的零测试结果。 */
 export async function runWindowsLifecycleTests({ cwd = repository, platform = process.platform } = {}) {

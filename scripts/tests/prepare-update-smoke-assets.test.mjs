@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { preparePreviousStable } from "../prepare-update-smoke-assets.mjs";
-import { updaterPublicKeySha256 } from "../release-assets.mjs";
+import { preparePreviousStable } from "../update-smoke/prepare-update-smoke-assets.mjs";
+import { updaterPublicKeySha256 } from "../release/release-assets.mjs";
 
 /** 把 minisign inner text 编码成 canonical outer-base64。 */
 function outer(lines) {

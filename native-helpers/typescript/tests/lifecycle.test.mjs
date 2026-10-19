@@ -6,7 +6,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
-import { typescriptConfiguration } from '../../../scripts/typescript-native-smoke.mjs';
+import { typescriptConfiguration } from '../../../scripts/language-packs/typescript-native-smoke.mjs';
 
 const protocol = 'narrant.native-analyzer/1';
 if (!process.env.NARRANT_TYPESCRIPT_PACK) throw new Error('NARRANT_TYPESCRIPT_PACK required');

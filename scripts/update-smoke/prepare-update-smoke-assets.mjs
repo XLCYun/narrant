@@ -8,8 +8,8 @@ import { pathToFileURL, URL } from "node:url";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
-import { updaterPublicKeySha256, verifyTauriUpdaterSignature } from "./release-assets.mjs";
-import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
+import { updaterPublicKeySha256, verifyTauriUpdaterSignature } from "../release/release-assets.mjs";
+import { FIXED_STABLE_ENDPOINT } from "../release/public-draft-assets.mjs";
 
 const MAX_MANIFEST_BYTES = 512 * 1024;
 const MAX_PACKAGE_BYTES = 2 * 1024 * 1024 * 1024;

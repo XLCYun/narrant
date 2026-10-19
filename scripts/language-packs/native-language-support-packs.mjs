@@ -5,7 +5,7 @@ import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const nativeIds = Object.keys(migratedNativePacks);
 
 /** 只复制自己构建的工具和批准的 SDK 声明，展开 SDK 内部链接，拒绝外向链接。 */

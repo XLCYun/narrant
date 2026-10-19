@@ -9,7 +9,7 @@ import { prepareDraftAssetDirectory } from "./release-assets.mjs";
 function main() {
   const [directory, notesFile] = process.argv.slice(2);
   if (!directory || !notesFile) {
-    throw new Error("用法：node scripts/prepare-draft-assets.mjs <assets-directory> <notes-file>");
+    throw new Error("用法：node scripts/release/prepare-draft-assets.mjs <assets-directory> <notes-file>");
   }
   const result = prepareDraftAssetDirectory({
     directory,

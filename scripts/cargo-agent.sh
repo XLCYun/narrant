@@ -3,7 +3,7 @@ set -eu
 
 # Cargo Agent 和 Tauri 共用同一套 sccache 环境，同时保留 Cargo profile 的增量编译默认值。
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-rust_cache_runner="$script_dir/rust-cache.mjs"
+rust_cache_runner="$script_dir/dev/rust-cache.mjs"
 
 # 所有 linked worktree 共享 git common dir，因此锁文件也天然跨 worktree 共享。
 common_dir=$(git rev-parse --path-format=absolute --git-common-dir)

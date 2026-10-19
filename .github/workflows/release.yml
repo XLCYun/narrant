@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           : "${NARRANT_GITHUB_CLIENT_ID:?缺少 Actions Variable NARRANT_GITHUB_CLIENT_ID}"
           : "${NARRANT_GITHUB_APP_SLUG:?缺少 Actions Variable NARRANT_GITHUB_APP_SLUG}"
-          version="$(node scripts/release-version-check.mjs "$GITHUB_REF_NAME")"
+          version="$(node scripts/release/release-version-check.mjs "$GITHUB_REF_NAME")"
           source_sha="$(git rev-parse "refs/tags/${GITHUB_REF_NAME}^{}")"
           echo "value=$version" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
@@ -379,19 +379,19 @@ jobs:
       - name: 在任何远端变更前固定当前 published Stable 身份
         id: previous-stable
         if: github.ref_name != vars.NARRANT_FIRST_UPDATER_TAG
-        run: node scripts/read-public-stable-identity.mjs
+        run: node scripts/release/read-public-stable-identity.mjs
       - uses: actions/download-artifact@v4
         with:
           pattern: narrant-*-${{ needs.validate.outputs.version }}
           path: release-assets
           merge-multiple: true
       - name: 生成公开 Release Notes
-        run: node scripts/generate-public-release-notes.mjs "$RELEASE_TAG" release-notes.md
+        run: node scripts/release/generate-public-release-notes.mjs "$RELEASE_TAG" release-notes.md
       - name: 在任何远端变更前生成并验证完整 Draft 资产
-        run: node scripts/prepare-draft-assets.mjs release-assets release-notes.md
+        run: node scripts/release/prepare-draft-assets.mjs release-assets release-notes.md
       - name: 创建或完整替换公开仓库 Draft 并 API 回读资产集合
         id: reconcile
-        run: node scripts/reconcile-draft-release.mjs "$RELEASE_TAG" "$RELEASE_VERSION" release-notes.md release-assets/*
+        run: node scripts/release/reconcile-draft-release.mjs "$RELEASE_TAG" "$RELEASE_VERSION" release-notes.md release-assets/*
 
   update-smoke:
     needs: [validate, draft-release]

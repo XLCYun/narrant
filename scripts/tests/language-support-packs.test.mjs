@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { packageDirectory } from '../build-language-support-packs.mjs';
+import { packageDirectory } from '../language-packs/build-language-support-packs.mjs';
 
 test('pack identity cannot escape its output directory', async () => {
   await assert.rejects(packageDirectory({ id: 'rust', version: '../escape', target: 'aarch64-apple-darwin' }, path.join(os.tmpdir(), 'missing-payload'), path.join(os.tmpdir(), 'missing-output')), /identity/);
@@ -47,14 +47,14 @@ function publicationFixture() {
 }
 
 test('publisher refuses incomplete platforms before remote writes', async () => {
-  const { publishArtifacts } = await import('../publish-language-support-packs.mjs');
+  const { publishArtifacts } = await import('../language-packs/publish-language-support-packs.mjs');
   const fixture = publicationFixture();
   await assert.rejects(publishArtifacts(fixture.artifacts.slice(0, 1), fixture.github), /both platforms/);
   assert.deepEqual(fixture.events, []);
 });
 
 test('publisher leaves a Draft if uploaded bytes differ', async () => {
-  const { publishArtifacts } = await import('../publish-language-support-packs.mjs');
+  const { publishArtifacts } = await import('../language-packs/publish-language-support-packs.mjs');
   const fixture = publicationFixture();
   fixture.github.readAsset = async () => Buffer.from('corrupt');
   await assert.rejects(publishArtifacts(fixture.artifacts, fixture.github), /differs/);
@@ -63,7 +63,7 @@ test('publisher leaves a Draft if uploaded bytes differ', async () => {
 });
 
 test('publisher verifies both platforms, never becomes Latest and reuses immutable versions', async () => {
-  const { publishArtifacts } = await import('../publish-language-support-packs.mjs');
+  const { publishArtifacts } = await import('../language-packs/publish-language-support-packs.mjs');
   const fixture = publicationFixture();
   await publishArtifacts(fixture.artifacts, fixture.github);
   assert.equal(fixture.release().draft, false);

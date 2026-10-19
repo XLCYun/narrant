@@ -26,8 +26,8 @@
 支持包构建与真实图 smoke：
 
 ```sh
-node scripts/build-language-support-packs.mjs --id typescript-javascript --target aarch64-apple-darwin --output native-language-support-packs
-node scripts/verify-native-analyzers.mjs native-language-support-packs --language typescript-javascript
+node scripts/language-packs/build-language-support-packs.mjs --id typescript-javascript --target aarch64-apple-darwin --output native-language-support-packs
+node scripts/language-packs/verify-native-analyzers.mjs native-language-support-packs --language typescript-javascript
 ```
 
 Windows 使用 `x86_64-pc-windows-msvc`，在对应平台本机构建和验证。

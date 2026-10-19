@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { URL } from "node:url";
 
-import { FIXED_STABLE_ENDPOINT, PUBLIC_RELEASE_REPOSITORY } from "./public-draft-assets.mjs";
-import { releaseAssetNames } from "./release-assets.mjs";
+import { FIXED_STABLE_ENDPOINT, PUBLIC_RELEASE_REPOSITORY } from "../release/public-draft-assets.mjs";
+import { releaseAssetNames } from "../release/release-assets.mjs";
 
 const HOSTNAME = "github.com";
 const LATEST_PATH = "/XLCYun/narrant/releases/latest/download/latest.json";

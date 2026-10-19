@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { create as createTar } from 'tar';
 import { validateArchive } from './archive-validation.mjs';
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const targets = ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc'];
 
 /** 产物键只由受支持的包、版本和平台组成。 */

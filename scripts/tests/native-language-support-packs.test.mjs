@@ -8,9 +8,9 @@ import { execFile, execFileSync, ChildProcess } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
-import { packageDirectory } from '../build-language-support-packs.mjs';
-import { copyToolTree, smokeNativeHelper, csharpFixturePlatforms, javaFixturePlatforms, goFixturePlatforms } from '../native-language-support-packs.mjs';
-import { prepareDotnetFixtureReferences } from '../provision-native-toolchains.mjs';
+import { packageDirectory } from '../language-packs/build-language-support-packs.mjs';
+import { copyToolTree, smokeNativeHelper, csharpFixturePlatforms, javaFixturePlatforms, goFixturePlatforms } from '../language-packs/native-language-support-packs.mjs';
+import { prepareDotnetFixtureReferences } from '../language-packs/provision-native-toolchains.mjs';
 
 /** 私有 runtime 的执行入口必须穿过打包与解压，两个平台都真实启动解包后的文件。 */
 test('native runtime executable survives archive extraction', async () => {
@@ -167,7 +167,7 @@ test('Java and Go fixtures describe actual SDKs without a bundled target list', 
 
 /** 已完成 helper 的入口身份固定；TS 暂存与未知身份拒绝不触发无关语言编译。 */
 test('migration build entry preserves completed helpers, rejects missing binaries and stages TypeScript', async t => {
-  const { migratingHelperEntry, buildMigratingNativeHelper } = await import('../build-migrating-native-helper.mjs');
+  const { migratingHelperEntry, buildMigratingNativeHelper } = await import('../language-packs/build-migrating-native-helper.mjs');
   assert.equal(migratingHelperEntry('rust', true).entry, 'bin/narrant-rust.exe');
   assert.equal(migratingHelperEntry('python', false).binary, 'narrant-python');
   assert.equal(migratingHelperEntry('typescript-javascript', false).entry, 'runtime/helper/main.mjs');
@@ -198,7 +198,7 @@ test('migration build entry preserves completed helpers, rejects missing binarie
 
 /** 语言筛选依据已迁移集合，不为不相关语言下载工具或接受未实现的核心。 */
 test('migration toolchain selection is explicit and complete', async () => {
-  const { selectedNativePacks, selectedToolchainNames } = await import('../native-migration.mjs');
+  const { selectedNativePacks, selectedToolchainNames } = await import('../language-packs/native-migration.mjs');
   assert.deepEqual(selectedToolchainNames('go'), ['go', 'go-target']);
   assert.deepEqual(selectedToolchainNames('java'), ['jdk25', 'jdk17', 'jdk8']);
   assert.deepEqual(selectedToolchainNames('csharp'), ['dotnet', 'dotnet-ref8', 'dotnet-ref9']);
@@ -211,7 +211,7 @@ test('migration toolchain selection is explicit and complete', async () => {
 
 /** Cargo 许可步骤只保留目标生产闭包，开发依赖不能冒充实际分发依赖。 */
 test('Cargo license packaging excludes unreachable development dependencies and binds real license bytes', async () => {
-  const { packageCargoLicenses } = await import('../native-language-support-packs.mjs');
+  const { packageCargoLicenses } = await import('../language-packs/native-language-support-packs.mjs');
   const repository = fileURLToPath(new URL('../../', import.meta.url));
   const root = await fs.mkdtemp(path.join(repository, '.license-test-'));
   try {
@@ -276,7 +276,7 @@ test('Cargo license packaging fetches uncached locked metadata without distribut
     }
     const payload = path.join(root, 'payload');
     await fs.mkdir(path.join(payload, 'licenses'), { recursive: true });
-    const module = new URL('../native-language-support-packs.mjs', import.meta.url).href;
+    const module = new URL('../language-packs/native-language-support-packs.mjs', import.meta.url).href;
     // 独立子进程传环境，避免并发测试改写全局 CARGO_HOME；异步调用允许 registry 响应。
     await run(process.execPath, ['--input-type=module', '-e', `import { packageCargoLicenses } from ${JSON.stringify(module)}; await packageCargoLicenses(...JSON.parse(process.argv[1]));`, JSON.stringify([source, target, payload, 'Fixture'])], { cwd: repository, env: environment });
     assert.equal(downloads, 2, 'collector must fetch the uncached locked development crate');

@@ -164,7 +164,7 @@ Node 启动、版本查询或 `transpileModule` smoke 不能代替 Code Graph �
 | TS/JS | 自身内容扣除子对象、完整表达式、格式不改差异、有语义文本及稀疏数组、JSDoc/JSX、配置引用无 dist、路径与依赖隔离 | `typescript_analyzer/tests/{syntax,graph_service,real_service}.rs`、`tests/syntax/content.rs`、`tests/{config,workspace}.test.mjs` |
 | Python | 3.7–3.14、property/overload、绑定与重绑定、`.py/.pyi`、跨项目冲突、Unicode/换行、污染环境与链接逃逸、测试排除 | `python_analyzer/tests/{graph,native}.rs` |
 | 公共接入 | 严格协议、选集与上下文、external 描述、覆盖/来源、失败传播、取消、退出屏障、两侧图及差异 | `native_analyzer/tests/`、`child_process/tests/`、`language_support/tests/`、`application/tests/` |
-| 交付 | 支持包真实安装、脱离开发工具运行、明确的新入口与旧入口删除、双平台记录 | `.github/workflows/language-support-packs.yml`、`scripts/verify-native-analyzers.mjs` |
+| 交付 | 支持包真实安装、脱离开发工具运行、明确的新入口与旧入口删除、双平台记录 | `.github/workflows/language-support-packs.yml`、`scripts/language-packs/verify-native-analyzers.mjs` |
 
 开发期间先取得本地 macOS ARM64 的真实工具证据；全部开发完成后集中补齐最终 CI，
 macOS ARM64 与 Windows x64 均须通过后才能交付。公共进程模块承担完整的平台场景，语言层保留接入
@@ -214,11 +214,11 @@ TS 测试过滤同时保留输入路径和真实仓库相对路径的既有规�
 
 公共 Native 应用回调携带既有类型化 Rust 依赖 scope，空语言组仍不启动 helper，
 文件级 `include_tests` 仍传给同一次分析请求。生产工厂和支持包版本由各语言后续验收任务启用。
-`scripts/build-migrating-native-helper.mjs <language> <staging-directory>` 提供固定源码的暂存
+`scripts/language-packs/build-migrating-native-helper.mjs <language> <staging-directory>` 提供固定源码的暂存
 构建入口；Rust/Python 必须已有 `narrant-rust`/`narrant-python` 协议 binary，TS 必须已有
 `native-helpers/typescript/main.mjs`。只有 core 的 crate 会明确失败，不生成正式支持包。
 
-已迁移集合由 `scripts/native-migration.mjs` 和应用 `PackId::NATIVE_MIGRATED` 显式记录。
+已迁移集合由 `scripts/language-packs/native-migration.mjs` 和应用 `PackId::NATIVE_MIGRATED` 显式记录。
 双平台 workflow 的 language 选择仅接受该集合；聚焦运行跳过旧服务器构建矩阵和无关 SDK，
 保留所选 helper 自身、公共进程/Host、真实安装、应用接入及图/diff 验收。
 `all` 保留最终全语言门禁与共享进程生命周期验收；未完成语言不会以空跑取得绿灯。

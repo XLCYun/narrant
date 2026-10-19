@@ -1,5 +1,7 @@
 # 开发与语言分析
 
+构建、开发、发布和验收脚本的目录与常用入口见 [scripts 导航](../scripts/README.md)。
+
 ## TypeScript / JavaScript 结构分析
 
 在 Narrant 仓库根目录安装应用依赖：
@@ -16,8 +18,8 @@ TypeScript 6.0.3、@types/node 22.20.1 和 undici-types 6.21.0；安装与使用
 开发验证在 macOS ARM64 或 Windows x64 使用对应目标构建本地候选：
 
 ```sh
-node scripts/build-language-support-packs.mjs --id typescript-javascript --target aarch64-apple-darwin --output native-language-support-packs
-node scripts/verify-native-analyzers.mjs native-language-support-packs --language typescript-javascript
+node scripts/language-packs/build-language-support-packs.mjs --id typescript-javascript --target aarch64-apple-darwin --output native-language-support-packs
+node scripts/language-packs/verify-native-analyzers.mjs native-language-support-packs --language typescript-javascript
 ```
 
 Windows 目标为 `x86_64-pc-windows-msvc`。构建验证固定上游摘要，不运行包安装脚本；

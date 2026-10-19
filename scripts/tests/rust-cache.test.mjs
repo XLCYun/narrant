@@ -9,7 +9,7 @@ import test from "node:test";
 import {
   assertSafeCacheDirectory,
   resolveCacheDirectory,
-} from "../rust-cache.mjs";
+} from "../dev/rust-cache.mjs";
 
 test("macOS 使用官方默认的用户缓存目录", () => {
   const directory = resolveCacheDirectory({
@@ -62,7 +62,7 @@ test("Rust 缓存入口保留原生命令的结构化参数", (t) => {
   const fixture = path.join(directory, "runner fixture.mjs");
   fs.writeFileSync(fixture, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n");
   const args = ["--config", `target.'cfg(all())'.runner=${JSON.stringify(["C:\\Program Files\\node.exe", "D:\\repo 空格\\runner.mjs"])}`];
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../rust-cache.mjs", import.meta.url)), "run", process.execPath, fixture, ...args], { encoding: "utf8" });
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../dev/rust-cache.mjs", import.meta.url)), "run", process.execPath, fixture, ...args], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), args);
 });

@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { extractTarXz } from './native-xz-extraction.mjs';
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const nativeTargets = { 'darwin-arm64': 'aarch64-apple-darwin', 'win32-x64': 'x86_64-pc-windows-msvc' };
 
 /** 校验固定清单，禁止 latest、非 HTTPS、越界目录和缺失摘要进入安装流程。 */

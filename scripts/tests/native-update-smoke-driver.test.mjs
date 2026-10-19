@@ -11,10 +11,10 @@ import {
   observeBootstrapRecovery,
   platformStatePaths,
   writeBootstrapVerificationFixture,
-} from "../native-update-platform-adapter.mjs";
-import { combineDriverErrors, runNativeUpdateSmokeDriver } from "../native-update-smoke-driver.mjs";
-import { BOOTSTRAP_CHECKPOINTS, NORMAL_CHECKPOINTS } from "../update-smoke-evidence.mjs";
-import { driverEnvironment } from "../run-native-update-smoke.mjs";
+} from "../update-smoke/native-update-platform-adapter.mjs";
+import { combineDriverErrors, runNativeUpdateSmokeDriver } from "../update-smoke/native-update-smoke-driver.mjs";
+import { BOOTSTRAP_CHECKPOINTS, NORMAL_CHECKPOINTS } from "../update-smoke/update-smoke-evidence.mjs";
+import { driverEnvironment } from "../update-smoke/run-native-update-smoke.mjs";
 
 test("driver 保留 hosted 保护所需标记，但不继承发布凭据", () => {
   assert.deepEqual(driverEnvironment({

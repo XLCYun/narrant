@@ -5,12 +5,12 @@ import { ReadableStream } from "node:stream/web";
 import test from "node:test";
 import { setImmediate as waitImmediate } from "node:timers/promises";
 
-import { releaseAssetNames } from "../release-assets.mjs";
+import { releaseAssetNames } from "../release/release-assets.mjs";
 import {
   reconcileDraftRelease,
   runGhCommand,
   uploadReleaseAsset,
-} from "../reconcile-draft-release.mjs";
+} from "../release/reconcile-draft-release.mjs";
 
 /** 返回当前版本八个经过本地预验的虚拟上传路径。 */
 function artifactPaths(version = "2.3.4") {

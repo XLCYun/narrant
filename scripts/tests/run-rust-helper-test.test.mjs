@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { rustHelperTestEnvironment } from '../run-rust-helper-test.mjs';
+import { rustHelperTestEnvironment } from '../language-packs/run-rust-helper-test.mjs';
 
 // 实际测试 runner 只移除 Cargo 构建覆盖，不改用户工具路径或进程全局环境。
 for (const injected of [true, false]) {
@@ -17,7 +17,7 @@ for (const injected of [true, false]) {
     const toolchain = '1.98.0-test';
     const cargo = path.join(directory, injected ? `toolchains/${toolchain}/bin` : 'user-tools', process.platform === 'win32' ? 'cargo.exe' : 'cargo');
     const env = { ...process.env, RUSTUP_HOME: directory, RUSTUP_TOOLCHAIN: toolchain, CARGO: cargo, RUSTC: path.join(directory, 'user-rustc') };
-    const child = spawnSync(process.execPath, [fileURLToPath(new URL('../run-rust-helper-test.mjs', import.meta.url)), process.execPath, fixture], { env, encoding: 'utf8' });
+    const child = spawnSync(process.execPath, [fileURLToPath(new URL('../language-packs/run-rust-helper-test.mjs', import.meta.url)), process.execPath, fixture], { env, encoding: 'utf8' });
     assert.equal(child.status, 0, child.stderr);
     const output = JSON.parse(child.stdout);
     assert.equal(output.RUSTUP_TOOLCHAIN, undefined);

@@ -10,7 +10,7 @@ import {
   PUBLIC_RELEASE_REPOSITORY,
   validateDraftReleaseIdentity,
 } from "./public-draft-assets.mjs";
-import { verifyUpdateSmokeEvidenceDirectory } from "./update-smoke-evidence.mjs";
+import { verifyUpdateSmokeEvidenceDirectory } from "../update-smoke/update-smoke-evidence.mjs";
 import { resolvePreviousReleaseSigningKeySha256 } from "./release-assets.mjs";
 
 const API_ORIGIN = "https://api.github.com";

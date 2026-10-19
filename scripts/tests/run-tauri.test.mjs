@@ -6,7 +6,7 @@ import {
   buildTauriArguments,
   buildTauriInvocation,
   normalizeUpdaterPublicKey,
-} from "../run-tauri.mjs";
+} from "../dev/run-tauri.mjs";
 
 const PUBLIC_KEY = Buffer.from(
   "untrusted comment: minisign public key: DFDAA0F6324E5A1\nRWSh5SRjD6r9DemB3l4PakKrUZY75SJqG+AZ55Tl03px1CbAMYYNsAzS",

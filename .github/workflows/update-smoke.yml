@@ -127,7 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${SOURCE_TAG#v}"
-          node scripts/public-draft-assets.mjs \
+          node scripts/release/public-draft-assets.mjs \
             "$PUBLIC_RELEASE_ID" "$PUBLIC_TAG" "$version" \
             candidate-assets candidate-draft-receipt.json
       - name: Prepare exact published previous Stable baseline
@@ -139,7 +139,7 @@ jobs:
           PREVIOUS_TAG: ${{ inputs.previous_stable_tag }}
         run: |
           set -euo pipefail
-          node scripts/prepare-update-smoke-assets.mjs "$TARGET" "$PREVIOUS_TAG" previous-assets
+          node scripts/update-smoke/prepare-update-smoke-assets.mjs "$TARGET" "$PREVIOUS_TAG" previous-assets
           test "$(node -p "require('./previous-assets/previous.json').manifestSha256")" = \
             "${{ inputs.previous_stable_manifest_sha256 }}"
       - name: Run repository-owned real native lifecycle
@@ -179,7 +179,7 @@ jobs:
           if [[ "$MODE" == normal ]]; then
             args+=(--previous-json previous-assets/previous.json)
           fi
-          node scripts/run-native-update-smoke.mjs "${args[@]}"
+          node scripts/update-smoke/run-native-update-smoke.mjs "${args[@]}"
       - name: Upload checksummed target evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -234,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${SOURCE_TAG#v}"
-          node scripts/public-draft-assets.mjs \
+          node scripts/release/public-draft-assets.mjs \
             "$PUBLIC_RELEASE_ID" "$PUBLIC_TAG" "$version" \
             aggregate-draft aggregate-draft-receipt.json
           manifest_sha="$(node -p "require('./aggregate-draft-receipt.json').manifestSha256")"
@@ -255,7 +255,7 @@ jobs:
           else
             args+=(--previous-tag "$PREVIOUS_TAG" --previous-manifest-sha256 "$PREVIOUS_MANIFEST_SHA256")
           fi
-          node scripts/update-smoke-evidence.mjs "${args[@]}"
+          node scripts/update-smoke/update-smoke-evidence.mjs "${args[@]}"
       - name: Upload verified aggregate evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

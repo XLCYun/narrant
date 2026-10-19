@@ -6,8 +6,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { validateToolchainManifest, verifyArchive } from '../provision-native-toolchains.mjs';
-import { runVerificationCommands, validateNativeConfiguration, verificationCommands } from '../verify-native-analyzers.mjs';
+import { validateToolchainManifest, verifyArchive } from '../language-packs/provision-native-toolchains.mjs';
+import { runVerificationCommands, validateNativeConfiguration, verificationCommands } from '../language-packs/verify-native-analyzers.mjs';
 
 const manifest = JSON.parse(await fs.readFile(new URL('../../resources/native-toolchains.json', import.meta.url), 'utf8'));
 const workflowSource = (await fs.readFile(new URL('../../.github/workflows/validate-language-support-packs.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
@@ -62,13 +62,13 @@ for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
     assert.ok(probeIndex > nativeJob.indexOf('actions/setup-node@'));
     assert.ok(probeIndex > nativeJob.indexOf('dtolnay/rust-toolchain@stable'));
     assert.ok(probeIndex < nativeJob.indexOf('pnpm install --frozen-lockfile'));
-    assert.ok(probeIndex < nativeJob.indexOf('scripts/provision-native-toolchains.mjs'));
+    assert.ok(probeIndex < nativeJob.indexOf('scripts/language-packs/provision-native-toolchains.mjs'));
     assert.equal(nativeJob.match(/dtolnay\/rust-toolchain@stable/g)?.length, 1);
     const probe = nativeJob.slice(probeIndex).split('\n      - ')[0];
     assert.match(probe, /if: runner\.os == 'Windows'/);
     assert.match(probe, /shell: pwsh/);
     assert.match(probe, /timeout-minutes: 5/);
-    assert.ok(probe.includes('node scripts/run-windows-process-probe.mjs'));
+    assert.ok(probe.includes('node scripts/language-packs/run-windows-process-probe.mjs'));
     assert.doesNotMatch(probe, /Get-Command|NARRANT_TEST_NODE/);
     assert.match(probe, /if \(\$LASTEXITCODE -ne 0\) \{ throw /);
     assert.doesNotMatch(probe, /continue-on-error/);
@@ -82,7 +82,7 @@ for (const [lineEnding, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
     assert.match(nativeJob, /Swatinem\/rust-cache/);
     assert.doesNotMatch(nativeJob, /CARGO_TARGET_DIR/);
     const acceptance = nativeJob.split('      - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance')[1].split('\n      - ')[0];
-    assert.match(acceptance, /run: node scripts\/verify-native-analyzers\.mjs native-language-support-packs --build/);
+    assert.match(acceptance, /run: node scripts\/language-packs\/verify-native-analyzers\.mjs native-language-support-packs --build/);
     assert.doesNotMatch(acceptance, /if:|continue-on-error/);
   });
 }
@@ -362,14 +362,14 @@ test('Rust acceptance declares fresh project prerequisites independently from he
   const prepare = native.split('name: Prepare Rust project sources and historical Cargo test inputs')[1].split('\n      - ')[0];
   assert.match(prepare, /rustup component add rust-src --toolchain stable/);
   assert.match(prepare, /rustup toolchain install 1\.81\.0 1\.94\.0 1\.96\.0 --profile minimal/);
-  assert.match(prepare, /node scripts\/prepare-rust-native-tests\.mjs --prepare/);
-  assert.ok(native.indexOf('prepare-rust-native-tests.mjs --prepare') < native.indexOf('node scripts/verify-native-analyzers.mjs'));
+  assert.match(prepare, /node scripts\/language-packs\/prepare-rust-native-tests\.mjs --prepare/);
+  assert.ok(native.indexOf('prepare-rust-native-tests.mjs --prepare') < native.indexOf('node scripts/language-packs/verify-native-analyzers.mjs'));
   const commands = verificationCommands({ NARRANT_PROJECT_RUST_TOOLCHAIN: 'stable', NARRANT_TEST_CARGO_TOOLCHAINS: '/81:/94:/96', NARRANT_TEST_CARGO_194: '/94' }, 'darwin', 'rust');
   assert.deepEqual(commands[0].args.slice(0, 6), ['scripts/cargo-agent.sh', '+1.98.0', 'test', '--manifest-path', 'native-helpers/rust/Cargo.toml', '--config']);
   assert.match(commands[0].args[6], /target\.'cfg\(all\(\)\)'\.runner=.*run-rust-helper-test\.mjs/);
   assert.deepEqual(commands[0].args.slice(7), ['--locked', '--no-fail-fast', '--lib', '--test', 'initial_protocol', '--test', 'lifecycle', '--', '--include-ignored', '--test-threads=1']);
   assert.throws(() => verificationCommands({}, 'darwin', 'rust'), /NARRANT_PROJECT_RUST_TOOLCHAIN/);
-  const { prepareRustNativeTests } = await import('../prepare-rust-native-tests.mjs');
+  const { prepareRustNativeTests } = await import('../language-packs/prepare-rust-native-tests.mjs');
   await assert.rejects(prepareRustNativeTests({}), /explicit.*CARGO_HOME/);
   await assert.rejects(prepareRustNativeTests({ NARRANT_PROJECT_RUST_TOOLCHAIN: 'stable', CARGO_HOME: '/cargo', NARRANT_TEST_CARGO_TOOLCHAINS: '/only-one' }), /exactly/);
 });

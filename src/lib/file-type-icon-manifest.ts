@@ -1,4 +1,4 @@
-/** 此文件由 scripts/generate-file-type-icons.mjs 生成，请勿手工编辑。 */
+/** 此文件由 scripts/dev/generate-file-type-icons.mjs 生成，请勿手工编辑。 */
 export const fileTypeIconManifest = {
   "dark": {
     "file": "file",

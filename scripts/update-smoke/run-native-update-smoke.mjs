@@ -10,7 +10,7 @@ import { selectSystemEnvironment } from "./update-smoke-environment.mjs";
 import {
   resolvePreviousReleaseSigningKeySha256,
   resolveUpdaterKeyPolicy,
-} from "./release-assets.mjs";
+} from "../release/release-assets.mjs";
 
 const DRIVER = path.resolve(import.meta.dirname, "native-update-smoke-driver.mjs");
 const OUTPUT_BOUND = 256 * 1024;

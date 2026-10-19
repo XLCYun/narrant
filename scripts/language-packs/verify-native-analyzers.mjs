@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { prepareRustNativeTests } from './prepare-rust-native-tests.mjs';
 import { nativeTargets } from './provision-native-toolchains.mjs';
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 /** 所有原生语言必须存在；不允许缺工具时让集成测试跳过后宣称通过。 */
 export function validateNativeConfiguration(config, platform = process.platform, language = 'all') {
@@ -37,7 +37,7 @@ export function verificationCommands(environment, platform = process.platform, l
   for (const name of ids.flatMap(id => required[id].map(name => `NARRANT_${name}`))) if (!environment[name]) throw new Error(`Missing fixed toolchain: ${name}`);
   const cargo = ['scripts/cargo-agent.sh', 'test', '--manifest-path', 'src-tauri/Cargo.toml'];
   // Git Bash 会丢失内联 TOML 中一层反斜杠转义；Windows 接受正斜杠路径，Unix 路径保持原样。
-  const rustTestRunner = `target.'cfg(all())'.runner=${JSON.stringify([process.execPath, path.join(repository, 'scripts/run-rust-helper-test.mjs')].map(file => platform === 'win32' ? file.replaceAll('\\', '/') : file))}`;
+  const rustTestRunner = `target.'cfg(all())'.runner=${JSON.stringify([process.execPath, path.join(repository, 'scripts/language-packs/run-rust-helper-test.mjs')].map(file => platform === 'win32' ? file.replaceAll('\\', '/') : file))}`;
   return [
     ...(ids.includes('go') ? [{ executable: path.join(environment.NARRANT_GO_SDK, `bin/go${suffix}`), args: ['test', './...'], cwd: 'native-helpers/go', environment: { GOROOT: environment.NARRANT_GO_SDK, GOTOOLCHAIN: 'local', GOWORK: 'off', GOPROXY: 'off', GOSUMDB: 'off', NARRANT_GO_TEST_SDKS: [environment.NARRANT_GO_TARGET_SDK, environment.NARRANT_GO_SDK].join(platform === 'win32' ? ';' : ':') } }] : []),
     ...(ids.includes('java') ? [{ executable: python, args: ['-m', 'unittest', 'discover', '-s', 'native-helpers/java/tests', '-v'], environment: { NARRANT_JAVA_TARGET: environment.NARRANT_JAVA_TARGET_JDK, NARRANT_JAVA_LIB: path.join(repository, '.tools/java-native/lib') } }] : []),
@@ -128,7 +128,7 @@ export async function verifyNativeAnalyzers(artifacts, build = false, language =
   const commands = verificationCommands(environment, process.platform, language);
   if (build) {
     if (ids.includes('java')) await execute({ executable: environment.NARRANT_PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3'), args: ['native-helpers/java/tools/fetch-deps.py'] }, environment);
-    for (const id of ids) await execute({ executable: process.execPath, args: ['scripts/build-language-support-packs.mjs', '--id', id, '--target', target, '--output', artifacts] }, environment);
+    for (const id of ids) await execute({ executable: process.execPath, args: ['scripts/language-packs/build-language-support-packs.mjs', '--id', id, '--target', target, '--output', artifacts] }, environment);
   }
   validateNativeConfiguration(JSON.parse(await fs.readFile(environment.NARRANT_NATIVE_HELPERS_CONFIG, 'utf8')), process.platform, language);
   await runVerificationCommands(commands, environment);

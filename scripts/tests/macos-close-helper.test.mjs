@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { URL } from "node:url";
 
-const helperPath = new URL("../macos-close-narrant-window.swift", import.meta.url);
-const adapterPath = new URL("../native-update-platform-adapter.mjs", import.meta.url);
+const helperPath = new URL("../update-smoke/macos-close-narrant-window.swift", import.meta.url);
+const adapterPath = new URL("../update-smoke/native-update-platform-adapter.mjs", import.meta.url);
 
 test("macOS helper 观察窗口或正常退出时只操作 exact PID 和 bundle，不依赖 Accessibility", async () => {
   const [helper, adapter] = await Promise.all([
