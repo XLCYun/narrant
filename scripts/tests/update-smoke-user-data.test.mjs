@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { writeUpgradeUserSettings, registerUpgradeRepository, assertUpgradeUserData } from '../update-smoke-user-data.mjs';
+import { writeUpgradeUserSettings, registerUpgradeRepository, assertUpgradeUserData } from '../update-smoke/update-smoke-user-data.mjs';
 
 test('upgrade evidence detects missing projects and reset settings in actual persisted files', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'narrant-upgrade-data-'));

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const historicalCargoVersions = ['1.81.0', '1.94.0', '1.96.0'];
 
 /** 验收工具链只读探测，缺少已安装版本时失败；这些历史样本不限制产品用户版本。 */

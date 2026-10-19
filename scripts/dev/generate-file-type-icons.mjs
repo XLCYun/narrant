@@ -4,7 +4,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { generateManifest } from "material-icon-theme";
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const outputDirectory = resolve(projectRoot, "public/file-type-icons");
 const manifestOutput = resolve(projectRoot, "src/lib/file-type-icon-manifest.ts");
 const packageDirectory = dirname(fileURLToPath(import.meta.resolve("material-icon-theme/package.json")));
@@ -45,7 +45,7 @@ function serializeManifest(manifest) {
     folderNames: { ...(base.folderNames ?? {}), ...(override.folderNames ?? {}) },
     folderNamesExpanded: { ...(base.folderNamesExpanded ?? {}), ...(override.folderNamesExpanded ?? {}) },
   });
-  return `/** 此文件由 scripts/generate-file-type-icons.mjs 生成，请勿手工编辑。 */\nexport const fileTypeIconManifest = ${JSON.stringify({ dark: pick(manifest), light: pick(manifest, manifest.light) }, null, 2)} as const;\n`;
+  return `/** 此文件由 scripts/dev/generate-file-type-icons.mjs 生成，请勿手工编辑。 */\nexport const fileTypeIconManifest = ${JSON.stringify({ dark: pick(manifest), light: pick(manifest, manifest.light) }, null, 2)} as const;\n`;
 }
 
 const manifest = generateManifest({ activeIconPack: "none" });

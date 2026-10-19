@@ -245,7 +245,7 @@ TS/JS 不安装项目依赖，Rust 保留既有依赖范围策略，但不得安
 - `resources/language-support-packs.json` 是应用与打包脚本共用的精确版本表。
 - `src-tauri/src/language_support/` 管理共享任务、安装提交、使用租约与清理。
 - `src/language-support/use-language-support-packs.ts` 是应用级唯一轮询器。
-- `scripts/build-language-support-packs.mjs` 生成四个产物；独立 workflow 原生执行工具，
+- `scripts/language-packs/build-language-support-packs.mjs` 生成四个产物；独立 workflow 原生执行工具，
   发布脚本先验证归档再公开清单，并验证用户访问的 HTTPS 地址。
 - [构建和发布操作说明](../language-support-packs.md) 记录首次上线条件、版本升级与回退。
 

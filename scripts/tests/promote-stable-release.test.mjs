@@ -3,9 +3,9 @@ import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 
-import { expectedDraftAssetNames } from "../public-draft-assets.mjs";
-import { assertBootstrapTransition, promoteStableRelease, verifyBootstrapReleaseHistory } from "../promote-stable-release.mjs";
-import { updaterPublicKeySha256 } from "../release-assets.mjs";
+import { expectedDraftAssetNames } from "../release/public-draft-assets.mjs";
+import { assertBootstrapTransition, promoteStableRelease, verifyBootstrapReleaseHistory } from "../release/promote-stable-release.mjs";
+import { updaterPublicKeySha256 } from "../release/release-assets.mjs";
 
 /** 生成只用于 protected previous-key identity 的 canonical minisign 公钥。 */
 function publicKeyFixture(idHex = "0102030405060708") {

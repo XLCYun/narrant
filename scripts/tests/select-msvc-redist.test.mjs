@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { selectMsvcRedist, readWindowsDllVersions } from '../select-msvc-redist.mjs';
+import { selectMsvcRedist, readWindowsDllVersions } from '../language-packs/select-msvc-redist.mjs';
 
 /** 用受控文件夹模拟 VS 安装元数据，目录 token 与 DLL 版本刻意不同。 */
 async function fixture(t, token = '14.44.35000') {

@@ -12,10 +12,10 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
-const releaseScript = resolve(repositoryRoot, "scripts/release-prepare.mjs");
+const releaseScript = resolve(repositoryRoot, "scripts/release/release-prepare.mjs");
 const releaseVersionCheckScript = resolve(
   repositoryRoot,
-  "scripts/release-version-check.mjs",
+  "scripts/release/release-version-check.mjs",
 );
 const temporaryRepositories: string[] = [];
 

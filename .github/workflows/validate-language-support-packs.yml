@@ -40,7 +40,7 @@ jobs:
       - name: Validate lifecycle runner
         run: node --test scripts/tests/run-windows-lifecycle-tests.test.mjs scripts/tests/run-tauri.test.mjs
       - name: Run process and Native Helper lifecycle checks from production sources
-        run: node scripts/run-windows-lifecycle-tests.mjs
+        run: node scripts/language-packs/run-windows-lifecycle-tests.mjs
 
   build:
     if: inputs.validation_scope == 'full' && inputs.language == 'all'
@@ -77,14 +77,14 @@ jobs:
       - name: Prepare pinned Rust helper build toolchain
         run: rustup toolchain install 1.98.0 --profile minimal
       - name: Build and execute native tools
-        run: node scripts/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
+        run: node scripts/language-packs/build-language-support-packs.mjs --target ${{ matrix.target }} --native --output language-support-packs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
           shared-key: ${{ runner.os }}-native
       - name: Verify native Python graphs, installation, and Review lifecycle
-        run: node scripts/verify-python-analyzer.mjs language-support-packs
+        run: node scripts/language-packs/verify-python-analyzer.mjs language-support-packs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         # PR 只验收；手动入口按需上传，发布入口强制保留产物。
         if: inputs.upload_artifacts
@@ -133,7 +133,7 @@ jobs:
         timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          node scripts/run-windows-process-probe.mjs
+          node scripts/language-packs/run-windows-process-probe.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Windows process cleanup probe failed; see job membership and process handle evidence above' }
       - run: pnpm install --frozen-lockfile
       - name: Test native validation and pack scripts
@@ -164,7 +164,7 @@ jobs:
           foreach ($directory in @("$msvc\include", "$sdk\ucrt", "$sdk\um", "$sdk\shared")) {
             if (!(Test-Path $directory -PathType Container)) { throw "Missing exact SDK directory: $directory" }
           }
-          node scripts/select-msvc-redist.mjs "$vs" "$($fixed.msvc_runtime_version)"
+          node scripts/language-packs/select-msvc-redist.mjs "$vs" "$($fixed.msvc_runtime_version)"
           if ($LASTEXITCODE -ne 0) { throw 'Fixed MSVC runtime selection failed; see metadata and DLL version evidence above' }
           "NARRANT_MSVC_ROOT=$msvc" >> $env:GITHUB_ENV
           "NARRANT_MSVC_VERSION=$version" >> $env:GITHUB_ENV
@@ -172,7 +172,7 @@ jobs:
           "NARRANT_WINDOWS_SDK_VERSION=$($fixed.windows_sdk)" >> $env:GITHUB_ENV
           "NARRANT_VISUAL_STUDIO=$vs" >> $env:GITHUB_ENV
       - name: Provision checksum-verified analyzer toolchains
-        run: node scripts/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
+        run: node scripts/language-packs/provision-native-toolchains.mjs "${{ runner.temp }}/narrant-native-toolchains" --language "${{ inputs.language || 'all' }}"
       - name: Select isolated Rust project test Cargo home
         env:
           NARRANT_RUST_TEST_CARGO_HOME: ${{ runner.temp }}/narrant-native-cargo
@@ -185,9 +185,9 @@ jobs:
         run: |
           rustup component add rust-src --toolchain stable
           rustup toolchain install 1.81.0 1.94.0 1.96.0 --profile minimal
-          node scripts/prepare-rust-native-tests.mjs --prepare
+          node scripts/language-packs/prepare-rust-native-tests.mjs --prepare
       - name: Build packs, run helper suites, Host lifecycle and public graph/diff conformance
-        run: node scripts/verify-native-analyzers.mjs native-language-support-packs --build --language "${{ inputs.language || 'all' }}"
+        run: node scripts/language-packs/verify-native-analyzers.mjs native-language-support-packs --build --language "${{ inputs.language || 'all' }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always() && inputs.upload_artifacts
         with:

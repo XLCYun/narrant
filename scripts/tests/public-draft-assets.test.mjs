@@ -7,13 +7,13 @@ import { join } from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
 
-import { prepareDraftAssetDirectory, releaseAssetNames } from "../release-assets.mjs";
+import { prepareDraftAssetDirectory, releaseAssetNames } from "../release/release-assets.mjs";
 import {
   assertSameDraftReceipt,
   downloadVerifiedPublicDraft,
   expectedDraftAssetNames,
   validateDraftReleaseIdentity,
-} from "../public-draft-assets.mjs";
+} from "../release/public-draft-assets.mjs";
 
 /** 生成可被 Task5 validator 接受的最小 PE。 */
 function pe(marker) {

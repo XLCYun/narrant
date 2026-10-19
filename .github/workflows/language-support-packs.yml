@@ -69,8 +69,8 @@ jobs:
           merge-multiple: true
           path: language-support-packs
       - name: Validate complete artifacts before obtaining credentials
-        run: node --input-type=module -e "import { readArtifacts } from './scripts/publish-language-support-packs.mjs'; await readArtifacts('language-support-packs')"
+        run: node --input-type=module -e "import { readArtifacts } from './scripts/language-packs/publish-language-support-packs.mjs'; await readArtifacts('language-support-packs')"
       - name: Publish immutable artifacts and verify public downloads
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/publish-language-support-packs.mjs language-support-packs
+        run: node scripts/language-packs/publish-language-support-packs.mjs language-support-packs

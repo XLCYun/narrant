@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateArchive } from '../archive-validation.mjs';
+import { validateArchive } from '../language-packs/archive-validation.mjs';
 
 test('归档允许 npm 的不同固定前缀，拒绝逃逸、链接和混合根', () => {
   validateArchive('package/\npackage/index.js\n', 'drwxr-xr-x package/\n-rw-r--r-- package/index.js\n');

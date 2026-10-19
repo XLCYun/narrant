@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 /** 固定迁移入口，不能用调用参数注入任意 crate、命令或输出程序名。 */
 export function migratingHelperEntry(id, windows = process.platform === 'win32') {

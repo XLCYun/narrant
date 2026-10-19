@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_CACHE_SIZE = "2G";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
-const REPOSITORY_ROOT = path.resolve(path.dirname(SCRIPT_PATH), "..");
+const REPOSITORY_ROOT = path.resolve(path.dirname(SCRIPT_PATH), "../..");
 
 /** 解析当前平台使用的 sccache 本地缓存目录。 */
 export function resolveCacheDirectory({ env = process.env, platform = process.platform } = {}) {

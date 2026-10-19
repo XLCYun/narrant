@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { exchangeTypeScript, typescriptConfiguration } from '../../../scripts/typescript-native-smoke.mjs';
+import { exchangeTypeScript, typescriptConfiguration } from '../../../scripts/language-packs/typescript-native-smoke.mjs';
 
 // 可复现的一次性 helper 样本；macOS time 同时提供完整子进程的墙钟与峰值 RSS。
 if (process.platform !== 'darwin') throw new Error('此性能样本使用 macOS /usr/bin/time -l');

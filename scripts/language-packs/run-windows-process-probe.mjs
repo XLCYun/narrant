@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 /** 运行同源所有者回归；保留既有入口名称，不再执行调查专用的重复 Job 实现。 */
 export async function runWindowsProcessProbe({ cwd = repository, platform = process.platform } = {}) {

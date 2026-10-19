@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
-import { readPublicStableIdentity } from "../read-public-stable-identity.mjs";
+import { readPublicStableIdentity } from "../release/read-public-stable-identity.mjs";
 
 const bytes = Buffer.from(JSON.stringify({
   version: "1.2.13",

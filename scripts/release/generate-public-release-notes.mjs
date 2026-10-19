@@ -23,7 +23,7 @@ export function generatePublicReleaseNotes(options, dependencies = {}) {
   const writeFile = dependencies.writeFile ?? writeFileSync;
   const version = tag?.startsWith("v") ? tag.slice(1) : "";
   if (!VERSION_PATTERN.test(version) || !output) {
-    throw new Error("用法：node scripts/generate-public-release-notes.mjs <vVERSION> <output>");
+    throw new Error("用法：node scripts/release/generate-public-release-notes.mjs <vVERSION> <output>");
   }
   const previousTag = runGit(["tag", "--list", "v*", "--sort=-v:refname"])
     .split("\n")

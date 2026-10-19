@@ -43,7 +43,7 @@ Rust 候选通过正常入口构建优化 helper，构建工具链固定 1.98.0�
 
 ```sh
 pnpm build:language-packs --id rust --native --output .tools/language-support-pack-artifacts
-node scripts/verify-native-analyzers.mjs .tools/language-support-pack-artifacts --language rust
+node scripts/language-packs/verify-native-analyzers.mjs .tools/language-support-pack-artifacts --language rust
 ```
 
 该验收覆盖真实图/diff、三档配置、隔离安装、生产 Review DTO 及取消/错误；
@@ -56,7 +56,7 @@ Python 不需要用户 Python、venv 或 Node；同源 Ruff parser/AST/codegen�
 
 ```sh
 pnpm build:language-packs --id python --native --output .tools/language-support-pack-artifacts
-node scripts/verify-python-analyzer.mjs .tools/language-support-pack-artifacts
+node scripts/language-packs/verify-python-analyzer.mjs .tools/language-support-pack-artifacts
 ```
 
 验证脚本委托共享原生验收入口，从正常归档提取 helper，通过仓库 Cargo 包装器依次验证
@@ -64,8 +64,9 @@ node scripts/verify-python-analyzer.mjs .tools/language-support-pack-artifacts
 正常退出后清理临时工具目录。Python 同样使用 1.98.0 优化构建和共享 Cargo 许可收集器。
 具体许可证据边界与本地结果见 [迁移验证](research/existing-native-helper-migration-validation.md)。
 
-PR 上 `Language support packs` workflow 在两个原生 runner 构建并启动工具，保存完整产物。
-它与应用发布、quality-gate 分开；不要手动触发 quality-gate。
+PR 的 `CI` 复用语言包验收 workflow，在两个原生 runner 构建并验收全部 Native Helper；
+PR 运行不上传大体积支持包。手动 `Language support packs` 入口按需上传产物并保留 7 天，
+发布入口保留完整产物。合并要求最新提交的 `Complete CI` 通过；不要手动触发 quality-gate。
 
 ## 首次上线与后续发布
 

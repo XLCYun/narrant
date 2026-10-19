@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { test } from 'node:test';
-import { typescriptConfiguration } from '../../../scripts/typescript-native-smoke.mjs';
+import { typescriptConfiguration } from '../../../scripts/language-packs/typescript-native-smoke.mjs';
 
 const protocol = 'narrant.native-analyzer/1';
 const config = await typescriptConfiguration(path.resolve(process.env.NARRANT_TYPESCRIPT_PACK));

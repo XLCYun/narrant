@@ -30,7 +30,7 @@ import {
   updaterPublicKeySha256,
   validateUpdaterManifest,
   verifyTauriUpdaterSignature,
-} from "../release-assets.mjs";
+} from "../release/release-assets.mjs";
 
 /** 创建含 PE 签名字节的最小 Windows 容器 fixture。 */
 function createPeFixture(marker) {

@@ -4,9 +4,9 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { readGitHubReleaseAsset } from './public-draft-assets.mjs';
+import { readGitHubReleaseAsset } from '../release/public-draft-assets.mjs';
 
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const REPOSITORY = 'XLCYun/narrant';
 const TARGETS = ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc'];
 

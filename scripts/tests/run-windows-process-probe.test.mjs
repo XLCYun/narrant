@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runWindowsProcessProbe } from '../run-windows-process-probe.mjs';
+import { runWindowsProcessProbe } from '../language-packs/run-windows-process-probe.mjs';
 
 // 拒绝其他平台上 cfg 移除全部回归后产生的零测试成功。
 test('owner regression launcher requires a Windows host', async () => {

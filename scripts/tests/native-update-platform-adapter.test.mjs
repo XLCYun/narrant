@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeWindowsInstallLocation, createNativeUpdatePlatformAdapter } from "../native-update-platform-adapter.mjs";
+import { normalizeWindowsInstallLocation, createNativeUpdatePlatformAdapter } from "../update-smoke/native-update-platform-adapter.mjs";
 
 test("production installer smoke rejects local and self-hosted environments before touching data", async () => {
   for (const environment of [{}, { GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "self-hosted" }]) {

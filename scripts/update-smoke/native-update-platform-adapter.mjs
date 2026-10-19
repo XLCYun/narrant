@@ -7,8 +7,8 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout } from "node:timers";
 
-import { releaseAssetNames, verifyTauriUpdaterSignature } from "./release-assets.mjs";
-import { FIXED_STABLE_ENDPOINT } from "./public-draft-assets.mjs";
+import { releaseAssetNames, verifyTauriUpdaterSignature } from "../release/release-assets.mjs";
+import { FIXED_STABLE_ENDPOINT } from "../release/public-draft-assets.mjs";
 import { createCandidateGateRoutes, withUpdateSmokeTlsGate } from "./update-smoke-tls-gate.mjs";
 import { createUpdateSmokeTlsSystemAdapter, runBoundedCommand } from "./update-smoke-tls-system-adapter.mjs";
 import { writeUpgradeUserSettings, registerUpgradeRepository, assertUpgradeUserData } from "./update-smoke-user-data.mjs";

@@ -4,7 +4,7 @@ set -euo pipefail
 
 # 计算仓库与 Apple 私密文件目录，确保脚本可从任意工作目录运行。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APPLE_DIR="$REPO_DIR/.apple"
 ENV_FILE="$APPLE_DIR/.env"
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { extractTarXz } from '../native-xz-extraction.mjs';
+import { extractTarXz } from '../language-packs/native-xz-extraction.mjs';
 
 /** 使用实际 Node 子进程模拟解码器与解包器，验证生产连接与退出等待。 */
 async function fixture(t, producerCode, consumerCode) {

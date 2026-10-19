@@ -25,11 +25,11 @@ scripts/cargo-agent.sh +1.98.0 test --manifest-path native-helpers/rust/Cargo.to
 构建时注入的 `RUSTUP_TOOLCHAIN`，或显式设为测试项目工具链；生产 helper 保留 Host
 提供的运行时覆盖。公共 Host 图测试位于 `native_analyzer/tests/rust_graph.rs`，设置
 `NARRANT_RUST_HELPER` 为本地二进制的绝对路径，再筛选并运行这些 ignored 集成测试。
-正常支持包入口为 `node scripts/build-language-support-packs.mjs --id rust --native`；
-`node scripts/verify-native-analyzers.mjs <产物目录> --language rust` 包含真实工厂、安装和 Review。
+正常支持包入口为 `node scripts/language-packs/build-language-support-packs.mjs --id rust --native`；
+`node scripts/language-packs/verify-native-analyzers.mjs <产物目录> --language rust` 包含真实工厂、安装和 Review。
 工厂测试的 `NARRANT_RUST_PACK` 指向完整安装目录，不能仅复制可执行文件。
 完整 Rust 门禁必须显式设置 `NARRANT_PROJECT_RUST_TOOLCHAIN` 和绝对 `CARGO_HOME`，
-并已安装项目测试工具链的 rust-src。`node scripts/prepare-rust-native-tests.mjs --prepare`
+并已安装项目测试工具链的 rust-src。`node scripts/language-packs/prepare-rust-native-tests.mjs --prepare`
 仅在测试准备阶段补齐标准库 metadata 依赖并验证离线解析；门禁本身只检查已有前提。
 旧 Cargo 兼容性样本还需已安装的 1.81.0、1.94.0 和 1.96.0；隔离目录可通过
 `NARRANT_TEST_CARGO_TOOLCHAINS` / `NARRANT_TEST_CARGO_194` 指定。它们是历史测试输入，

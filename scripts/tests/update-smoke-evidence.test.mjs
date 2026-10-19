@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { expectedDraftAssetNames } from "../public-draft-assets.mjs";
+import { expectedDraftAssetNames } from "../release/public-draft-assets.mjs";
 import {
   BOOTSTRAP_CHECKPOINTS,
   NORMAL_CHECKPOINTS,
@@ -12,7 +12,7 @@ import {
   verifyUpdateSmokeEvidenceDocument,
   verifyUpdateSmokeEvidenceSet,
   writeUpdateSmokeEvidence,
-} from "../update-smoke-evidence.mjs";
+} from "../update-smoke/update-smoke-evidence.mjs";
 
 const now = new Date("2026-09-02T08:00:00.000Z");
 const sha = "a".repeat(64);

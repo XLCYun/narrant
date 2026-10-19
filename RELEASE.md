@@ -1,101 +1,50 @@
 # 发布 Narrant
 
-正式版本由私有源仓库中的稳定版本标签触发。工作流完成质量门禁，构建 macOS
-和 Windows 安装包，并在 `cyunlab/narrant` 创建一个待人工检查的 Draft Release。
-
-## 首次配置
-
-在私有源仓库的 Settings → Secrets and variables → Actions 中配置以下 Repository
-Variables：
-
-- `NARRANT_GITHUB_CLIENT_ID`：GitHub App 的公开 Client ID。
-- `NARRANT_GITHUB_APP_SLUG`：GitHub App URL 中的公开 slug。
-
-配置以下 Repository Secrets：
-
-- `CYUNLAB_RELEASE_TOKEN`：Fine-grained personal access token，只授权
-  `cyunlab/narrant`，Repository permissions 中仅需 `Contents: Read and write`。
-- `APPLE_CERTIFICATE`：Developer ID Application `.p12` 文件的单行 Base64。
-- `APPLE_CERTIFICATE_PASSWORD`：导出 `.p12` 时设置的密码。
-- `APPLE_SIGNING_IDENTITY`：`security find-identity -v -p codesigning` 输出中的
-  Developer ID Application 身份全名。
-- `APPLE_API_ISSUER`：App Store Connect API Issuer ID。
-- `APPLE_API_KEY`：App Store Connect API Key ID。
-- `APPLE_API_PRIVATE_KEY`：对应 `.p8` 私钥文件的单行 Base64。
-
-在 macOS 上可用以下命令生成两个 Base64 值：
-
-```bash
-openssl base64 -A -in developer-id-application.p12
-openssl base64 -A -in AuthKey_KEY_ID.p8
-```
-
-不要向 Actions 提供 GitHub App Client Secret、GitHub App 私钥或 Apple 凭据原文件。
+源码、应用 Release、应用更新和语言支持包统一位于 `XLCYun/narrant`。
+应用发布从稳定版本 tag 开始，经双平台构建、Draft 验证及正式安装升级验收后，
+由维护者手动启动受保护的 promotion 流程。正式步骤、凭据、bootstrap 与失败恢复以
+[Application Update 发布运维](docs/application-update-operations.md)为准。
 
 ## 准备版本
 
-先同步远端分支和标签，并确保工作区没有未提交修改。传入不带 `v` 的完整稳定
-SemVer：
+先同步默认分支和标签，确保工作区干净。`release:prepare` 接受不带 `v` 的完整稳定 SemVer，
+目标版本必须高于当前版本与已有稳定标签。以下版本仅作示例，执行时选择实际待发布版本：
 
 ```bash
 git fetch origin --tags
-pnpm release:prepare 1.2.0
+pnpm release:prepare 1.2.15
 ```
 
-命令会完成以下操作：
+该入口位于 `scripts/release/release-prepare.mjs`，会：
 
-1. 检查 `package.json`、Tauri 配置、`Cargo.toml` 和 `Cargo.lock` 中的当前版本一致。
-2. 将四处版本更新为指定版本。
-3. 创建 `chore(release): v1.2.0` 提交。
-4. 创建 annotated tag `v1.2.0`。
+1. 检查 package、Tauri、Cargo manifest 与 Cargo lock 的当前版本一致。
+2. 同步四处版本，创建 `chore(release): v<version>` 提交和 annotated tag。
+3. 失败时回滚本次版本准备；成功后保留本地提交和 tag，不执行推送。
 
-命令不会推送。检查提交和标签后，显式推送：
+检查提交和 tag 后再显式推送；发布 source 必须属于默认分支。已发布 tag 不移动或复用，
+失败恢复和正式发布后的修复遵循运维说明。
 
-```bash
-git show --stat v1.2.0
-git push origin HEAD v1.2.0
-```
+## 构建、验收与公开
 
-标签可以来自任意分支；创建合法稳定版本标签的人等同于拥有发布权限。因为标签
-触发的工作流来自该标签对应的提交，能够创建标签的人也可能修改工作流并接触发布
-Secrets。仓库应只向可信发布者授予写权限。标签一旦推送便不得移动或重建，发现
-问题时应准备新的补丁版本。
+`release.yml` 复用完整质量门禁，在 GitHub-hosted macOS ARM64 和 Windows x64 上构建正式包。
+macOS 继续执行 Developer ID 签名、公证及 stapling；Windows 当前可没有 Authenticode，
+两个平台的 updater minisign 签名都必须保留。
 
-## 自动构建
+Draft 包含两个安装包、两个 updater 包、两个签名、`latest.json` 和 `SHA256SUMS` 共八资产。
+固定 Release ID、source SHA、资产字节与签名经回读校验后，自动进入双平台 `update-smoke`。
+normal 验证上一 Stable 到候选的真实升级，首版 bootstrap 按明确授权单独报告安装验收。
 
-`.github/workflows/release.yml` 只接受 `vMAJOR.MINOR.PATCH` 标签，并要求标签版本
-高于已有稳定标签且与四处版本声明完全一致。它依次执行：
+维护者核对候选及证据后，手动启动 `Promote public Stable release`。该流程在发布前再次
+检查可信 Actions run、双平台证据、Draft 和 previous Stable 身份，只发布固定候选。
+不要绕过该门禁在 Release 页面直接公开 Draft。发布后匿名回读确认；已发布资产不原地修改。
 
-1. 可复用的完整质量门禁，包括 Rust、TypeScript，以及 macOS 和 Windows 的真实
-   Tauri E2E。
-2. 在 Apple Silicon runner 上构建、签名、公证并验证 DMG。
-3. 构建未进行 Authenticode 签名的 Windows x64 NSIS 安装包。
-4. 汇总上一个稳定版本以来的 commit 标题，生成公开 Release Notes。
-5. 生成 `SHA256SUMS`，在 `cyunlab/narrant` 创建或更新 Draft Release 并上传资产。
+## 配置与开发入口
 
-同一标签重跑时，工作流只会更新仍处于 Draft 状态的 Release，并先删除旧资产。
-它不会修改已公开的 Release。
+本仓库使用 `GITHUB_TOKEN`，不需要旧分发仓库 token。签名 secrets、updater 公钥角色、
+受保护 Environment、首版 bootstrap 与换钥安排见[发布配置](docs/application-update-operations.md#github-配置)。
+密钥及密码不得进入源码、日志、artifact 或 Release。
 
-## 人工公开
-
-工作流成功后，在 `cyunlab/narrant` 的 Releases 页面检查：
-
-- Release Notes 中没有不应公开的提交标题。
-- 存在 Apple Silicon DMG、Windows x64 NSIS EXE 和 `SHA256SUMS`。
-- Windows 未签名提示仍然准确。
-
-检查完成后，在 GitHub 页面点击 Publish release。Actions 不会自动执行公开操作。
-
-## 本地质量门禁
-
-需要在发布前本地复核时，Rust 命令统一通过仓库级 Cargo 锁运行：
-
-```bash
-scripts/cargo-agent.sh fmt --all --manifest-path src-tauri/Cargo.toml -- --check
-scripts/cargo-agent.sh clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --all-targets
-scripts/cargo-agent.sh test --manifest-path src-tauri/Cargo.toml --doc
-pnpm lint
-pnpm build
-pnpm test
-```
+日常聚焦验证与 PR 自动 `Complete CI` 规则见[开发说明](docs/development.md#合并前-ci)；
+不额外手动触发 quality-gate。正式安装升级只在托管临时机器运行。
+脚本目录及常用命令见[scripts 导航](scripts/README.md)，语言支持包独立 prerelease 见
+[语言支持包发布](docs/language-support-packs.md#首次上线与后续发布)。
