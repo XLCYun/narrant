@@ -270,13 +270,10 @@ export function RepositoryOverview(props: Props) {
                 </div>}
               />}
               {(hasMore || props.discoveryLoadingMore || (complete && visibleRows.length > 0)) && <div className="flex flex-wrap items-center justify-center gap-3 border-t p-4">
-                {hasMore || props.discoveryLoadingMore ? <>
-                  <p className="text-sm text-muted-foreground" role="status">{t("repository:pullRequestPagination.partial")}</p>
-                  <Button size="sm" variant="outline" disabled={props.discoveryLoading || Boolean(props.discoveryError)} aria-busy={props.discoveryLoadingMore || undefined} onClick={props.onLoadMoreDiscovery}>
-                    {props.discoveryLoadingMore && <Spinner aria-hidden />}
-                    {t(props.discoveryLoadingMore ? "repository:pullRequestPagination.loadingMore" : "repository:pullRequestPagination.loadMore")}
-                  </Button>
-                </> : <p className="text-sm text-muted-foreground" role="status">{t("repository:pullRequestPagination.end")}</p>}
+                {hasMore || props.discoveryLoadingMore ? <Button size="sm" variant="outline" disabled={props.discoveryLoading || Boolean(props.discoveryError)} aria-busy={props.discoveryLoadingMore || undefined} onClick={props.onLoadMoreDiscovery}>
+                  {props.discoveryLoadingMore && <Spinner aria-hidden />}
+                  {t(props.discoveryLoadingMore ? "repository:pullRequestPagination.loadingMore" : "repository:pullRequestPagination.loadMore")}
+                </Button> : <p className="text-sm text-muted-foreground" role="status">{t("repository:pullRequestPagination.end")}</p>}
               </div>}
             </TabsContent>
           </Tabs>

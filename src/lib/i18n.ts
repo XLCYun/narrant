@@ -75,7 +75,6 @@ export const resources = {
       loadingPullRequests: "正在加载 Pull Request…",
       pullRequestPagination: {
         loadMore: "加载更多", loadingMore: "正在加载更多", end: "已到末尾",
-        partial: "当前仅显示已加载的结果。",
         noLoadedMatches: "已加载的结果中没有{{state}}的 Pull Request",
         noLoadedResults: "已加载的结果中暂无 Pull Request",
         incomplete: "结果尚未完整加载，可以继续加载或重试失败的来源。",
@@ -246,7 +245,6 @@ export const resources = {
       loadingPullRequests: "Loading Pull Requests…",
       pullRequestPagination: {
         loadMore: "Load more", loadingMore: "Loading more", end: "End of results",
-        partial: "Showing loaded results only.",
         noLoadedMatches: "No {{state}} Pull Requests in loaded results",
         noLoadedResults: "No Pull Requests in loaded results",
         incomplete: "Results are incomplete. Load more or retry failed sources.",
