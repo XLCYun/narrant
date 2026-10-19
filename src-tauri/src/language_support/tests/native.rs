@@ -1,12 +1,34 @@
 use super::*;
 use crate::structure_review::{
-    code_graph::{AnalysisInput, AnalysisOptions, LanguageAnalyzer},
+    code_graph::{AnalysisInput, AnalysisOptions, CodeCategory, LanguageAnalyzer},
     codegraph_client::CodeGraphAnalyzer,
 };
 use httpmock::prelude::*;
 
-/// 每个目标都经过安装工厂和真实 helper，确保本机发现与打包入口共同生效。
-async fn assert_installed_target(id: PackId, installed: &Path, repository: &Path, file: &str) {
+/// 每个目标通过已租用的公开入口分析，验证描述符身份、源码图与分析前后的删除保护。
+async fn assert_installed_target(
+    id: PackId,
+    packs: &LanguageSupportPacks,
+    lease: &PackLease,
+    repository: &Path,
+    file: &str,
+) {
+    let installed = lease.path(id).expect("真实分析必须持有包租约");
+    let descriptor: serde_json::Value =
+        serde_json::from_slice(&fs::read(installed.join("control/codegraph.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        descriptor,
+        serde_json::from_slice::<serde_json::Value>(&super::test_support::descriptor(id.slug()))
+            .unwrap(),
+        "已安装公开描述符必须保留固定包、引擎与协议身份"
+    );
+    let version = &versions()[&id];
+    assert!(packs.snapshot().packs.iter().any(|pack| {
+        pack.id == id && pack.version == *version && pack.phase == PackPhase::Ready && pack.in_use
+    }));
+    assert!(packs.remove(id, version).is_err());
+    let source = fs::read_to_string(repository.join(file)).unwrap();
     let installed = installed.to_owned();
     let input = AnalysisInput {
         repository_root: repository.into(),
@@ -26,6 +48,24 @@ async fn assert_installed_target(id: PackId, installed: &Path, repository: &Path
         "{} 返回了空图",
         id.slug()
     );
+    let mut pending = graph.root().contains.clone();
+    let mut values = Vec::new();
+    while let Some(id) = pending.pop() {
+        let node = graph.node(&id).unwrap();
+        pending.extend(node.data().contains.iter().cloned());
+        if node.category() == CodeCategory::Callable
+            && matches!(node.data().name.as_deref(), Some("value" | "Value"))
+        {
+            values.push(node);
+        }
+    }
+    assert_eq!(values.len(), 1, "真实目标图必须包含唯一的源码函数");
+    let returned_source = values[0].data().source.as_deref().unwrap();
+    assert!(
+        !returned_source.is_empty() && source.contains(returned_source),
+        "公开图必须保留当前目标样本的真实源码"
+    );
+    assert!(packs.remove(id, version).is_err());
 }
 
 /// 未发布能力的请求保留包身份与明确原因，不能尝试访问虚构远端版本。
@@ -103,7 +143,7 @@ fn manifest_requires_public_cli_and_descriptor_on_both_targets() {
     }
 }
 
-/// 所选已迁移归档经过真实下载校验、安装、工厂和 helper 分析后才能宣称安装可用。
+/// 所选真实归档经过下载校验、安装租约和公共 CLI 的目标矩阵后才能宣称安装可用。
 #[tokio::test]
 #[ignore = "需要 NARRANT_CODEGRAPH_ARTIFACTS 指向真实构建产物；显式执行且不得静默跳过缺包"]
 async fn real_codegraph_packs_install_and_analyze_through_public_cli() {
@@ -195,31 +235,16 @@ async fn real_codegraph_packs_install_and_analyze_through_public_cli() {
                 "main.cpp"
             }
         };
-        if let Some(kind) = match id {
-            PackId::Go => Some("go"),
-            PackId::Java => Some("java"),
-            PackId::Csharp => Some("dotnet"),
-            _ => None,
-        } {
-            // 目标声明由本机发现；Java 运行 JDK 可作为自身真实 major 的候选，不再复制另一套17。
-            let installed = lease.path(id).unwrap();
-            let control: serde_json::Value =
-                serde_json::from_slice(&fs::read(installed.join("control/native.json")).unwrap())
-                    .unwrap();
-            assert_eq!(control["target_sdk"]["kind"], kind);
-            assert!(control["platforms"].as_array().unwrap().is_empty());
-            assert!(!installed.join("runtime/platform").exists());
-        }
-        assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
+        assert_installed_target(id, &packs, &lease, fixture.path(), file).await;
         if id == PackId::Csharp {
-            // 同一私有运行时切换本机发现的目标；新增 net9 样本不能依赖产品内置目标表。
+            // 同一公开包切换项目声明的目标；net9 样本不能依赖消费者内置目标表。
             for (tfm, language) in [("net8.0", "12.0"), ("net9.0", "13.0")] {
                 fs::write(fixture.path().join("narrant.csharp.json"), serde_json::to_vec(&serde_json::json!({
                     "version":"csharp-static-v1","configurations":[{"id":"main","files":["Main.cs"],
                     "tfm":tfm,"language_version":language,"define_constants":[],"implicit_usings":false}]
                 })).unwrap()).unwrap();
                 fs::write(fixture.path().join("Main.cs"), "public static class Main { public static int Value() { return System.Math.Abs(-1); } }").unwrap();
-                assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
+                assert_installed_target(id, &packs, &lease, fixture.path(), file).await;
             }
         }
         if id == PackId::Java {
@@ -229,7 +254,7 @@ async fn real_codegraph_packs_install_and_analyze_through_public_cli() {
             ] {
                 fs::write(fixture.path().join("narrant-java.json"), serde_json::to_vec(&serde_json::json!({"schema":"java-static-v1","release":release,"source_roots":[{"path":"src","role":"main"}]})).unwrap()).unwrap();
                 fs::write(fixture.path().join(file), format!("public class Main {{ public static int value() {{ return {expression}; }} }}")).unwrap();
-                assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
+                assert_installed_target(id, &packs, &lease, fixture.path(), file).await;
             }
         }
         if id == PackId::Go {
@@ -239,7 +264,7 @@ async fn real_codegraph_packs_install_and_analyze_through_public_cli() {
             )
             .unwrap();
             fs::write(fixture.path().join(file), "package native\nimport \"strings\"\nfunc Value() { for range strings.SplitSeq(\"a,b\", \",\") {} }\n").unwrap();
-            assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
+            assert_installed_target(id, &packs, &lease, fixture.path(), file).await;
         }
         if id == PackId::CCpp {
             // 产品目录不再指定统一语言标准，C 和 C++ 各自采用编译数据库的 -std。
@@ -257,7 +282,7 @@ async fn real_codegraph_packs_install_and_analyze_through_public_cli() {
             ] {
                 fs::write(fixture.path().join(file), source).unwrap();
                 fs::write(fixture.path().join("compile_commands.json"), serde_json::to_vec(&serde_json::json!([{"directory":fixture.path(),"file":file,"arguments":["clang",format!("-std={standard}"),file]}])).unwrap()).unwrap();
-                assert_installed_target(id, lease.path(id).unwrap(), fixture.path(), file).await;
+                assert_installed_target(id, &packs, &lease, fixture.path(), file).await;
             }
         }
         assert!(packs.remove(id, version).is_err());
