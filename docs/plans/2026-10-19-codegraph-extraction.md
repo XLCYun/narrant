@@ -38,6 +38,8 @@ CodeGraph PR 审核合并是首次 Release 的前置条件，Narrant 最终 CI �
    ID 沿用 `rust`、`typescript-javascript`、`python`、`java`、`go`、`csharp`、`c-cpp`。
    受信支持包由调用方选定；请求不得携带任意 helper 命令、执行环境或未校验 SDK 根。
    CLI 负责完整 factory 与分析调用，Narrant 不再需要知道语言运行时布局。
+   `control/codegraph.json` 独立声明 `schema_version: 1`、`pack_id`、`pack_version`、`engine_version`、`protocol`；
+   CLI 核对包 ID、引擎版本和协议，首版两个版本均 `0.1.0`。原 `control/native.json` 保持私有且不混入公共字段。
 4. 公共协议 `codegraph.analyzer/1`，UTF-8 NDJSON。启动输出 ready（协议、引擎版本、包 ID）；
    消费者发送一次 analyze（请求 ID、绝对 repository_root、相对 files、options：include_tests 与 rust_dependency_scope）。
    按请求 ID 接受 cancel；完成一次后退出。允许请求后的 stdin EOF，便于 `< request.json` 与管道使用；
@@ -72,11 +74,15 @@ CodeGraph PR 审核合并是首次 Release 的前置条件，Narrant 最终 CI �
    保留 manifest 的身份、平台、每文件 hash/权限和归档 hash/size 校验；增加明确 CLI 版本/协议控制信息。
    另外发布相同 binary 的独立 CLI 归档供手工消费者配合 pack-root 使用。
    包版本与 CLI 版本明确绑定，首个 CodeGraph 系列统一 `0.1.0`，不能覆盖原渠道包。
+   实际归档需满足消费者的 256 MiB 归档、1 GiB 解包及 2 MiB manifest 上限，超限应说明并有依据地调整契约。
 3. 创建独立双平台 PR CI：macOS ARM64 与 Windows x64，构建、解包和真实公共 CLI 验收覆盖全部七包；
    保留既有语义、配置、来源、只读、生命周期、Rust 依赖档与 Windows process probe 测试。
    原 Narrant Review/Diff 专属测试留待任务 3，在 CodeGraph 以公共 CLI 图验收替代应用依赖。
    不能因为旧 workflow 只收集三包，就漏发另外四包。
-4. Release 工作流只发布已验证精确提交，固定 tag/资产名，不覆盖不同内容的已有版本。
+4. Release 工作流只发布已验证精确提交，不覆盖不同内容的已有版本。
+   一个 `v<engine-version>` Release 同时容纳双平台 CLI 和七套包；首版 tag 为 `v0.1.0`。
+   语言资产为 `<id>-<target>-pack.tar.gz` 与 `<id>-<target>-manifest.json`；
+   CLI 资产为 `codegraph-<target>.tar.gz`，发布 `SHA256SUMS`。
    准备全部双平台 CLI/包/manifest/校验信息，远端发布由控制端在 PR 合并及 CI 满足后执行。
    首版可为不可变 prerelease，不能冒充不存在的可下载版本；文档准确说明工具链前置与安装方式。
 5. 运行脚本测试、格式/依赖验证和本机可覆盖的真实包构建/CLI 验收，记录 Windows CI 与本机缺项。
@@ -98,6 +104,7 @@ CodeGraph checkout 作为只读协议及候选来源。遵守 Global Constraints
 3. 更新语言支持目录/下载源/必需文件为固定 CodeGraph 产物，保留完整性、版本隔离与租约。
    生产不接受浮动 tag/latest。未发布前保持 unpublished，支持受控本机已验证候选集成，
    最终发布后将精确版本设为 published；不以 skip 或假请求替代真实下载。
+   测试同 ID/版本的旧 Narrant 安装不能冒充 CodeGraph；保持旧安装使用锁，不能覆盖在用目录。
 4. 移除迁出的 native-helpers、native Host/factory 和 CodeGraph 拥有的构建发布脚本，
    不删除 Narrant 共享 child_process 或图/diff；测试和 fixtures 按所有权迁移，保留消费验收。
 5. CI 取得精确 CodeGraph 七包，在双平台完成安装、真实 CLI、图差异和 Review DTO 链路。

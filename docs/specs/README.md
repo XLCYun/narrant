@@ -7,7 +7,7 @@ the full specification.
 Repository scripts are organized by maintenance responsibility in
 [0026 — Scripts organization](0026-scripts-organization.md), implemented in Issue #204.
 
-Extraction into a reusable public project and Narrant integration are being clarified in
+Extraction into a reusable public project and Narrant integration are specified in
 [0027 — Independent CodeGraph project](0027-independent-codegraph-project.md), tracked by Issue #205.
 
 The TypeScript / JavaScript Code Graph is specified in
