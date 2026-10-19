@@ -4,6 +4,9 @@ status: accepted
 
 # 统一源码、发布和升级仓库
 
+语言支持包的分发归属已由 [ADR-0037](0037-extract-codegraph-behind-one-cli.md) 更新为
+独立 CodeGraph 仓库；本决策的 Narrant 应用发布、升级与身份约束继续有效。
+
 用户计划公开 `XLCYun/narrant`，由同一个 GitHub 仓库承载源码、应用 Release、
 应用升级 manifest 和语言支持包；取消对 `cyunlab/narrant` 分发仓库及 OSS 升级源的依赖。
 CI 恢复 GitHub-hosted runner，继续面向 macOS ARM64 和 Windows x64。

@@ -75,8 +75,9 @@ _Avoid_: Entire subtree source, full-file content
 
 **Code Graph**:
 A representation of **Code Objects** and their relationships within a selected file
-scope at one fixed side of a **Change Comparison**. Membership is independent of
-which objects a **Review View** currently displays.
+scope of one fixed source state. In Narrant, it represents one side of a
+**Change Comparison**; membership is independent of which objects a **Review View**
+currently displays.
 _Avoid_: Text diff, syntax tree
 
 **Configuration Union Code Graph（配置并集代码图）**:
@@ -298,7 +299,7 @@ _Avoid_: Stateless patch, full response repair
   **Comparison Base** from the current base and head commits; a Pull Request does not
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
-- A **Code Graph** represents **Code Objects** at the Comparison Base or Head revision
+- In Narrant, a **Code Graph** represents **Code Objects** at the Comparison Base or Head revision
   of a **Change Comparison**
 - A **Code Graph Difference** compares the before Code Graph to the after Code Graph
   of the same **Change Comparison**
