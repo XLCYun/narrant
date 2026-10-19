@@ -342,11 +342,11 @@ describe("App", () => {
       if (command === "discover_github_pull_requests") return Promise.resolve([
         {
           repository: { owner: "fork-owner", name: "fork-repo" },
-          remoteNames: ["fork"], pullRequests: [], error: "GitHub 访问次数已用尽",
+          remoteNames: ["fork"], page: 1, nextPage: null, pullRequests: [], error: "GitHub 访问次数已用尽",
         },
         {
           repository: { owner: "octo-org", name: "octo-repo" },
-          remoteNames: ["origin", "upstream"], error: null,
+          remoteNames: ["origin", "upstream"], page: 1, nextPage: null, error: null,
           pullRequests: [{
             number: 42, title: "Metadata only", description: "Details", authorUsername: "octocat",
             state: "open", isDraft: false,
@@ -369,7 +369,7 @@ describe("App", () => {
     expect(screen.getByText(/fork-owner\/fork-repo/)).toHaveTextContent(/GitHub 访问次数已用尽/);
   });
 
-  it("首次进入另一个 Repository 概览时重新默认 Open，切换筛选不调用 Tauri", async () => {
+  it("首次进入概览默认 Open，未查询筛选发起首页请求，返回已完成筛选复用缓存", async () => {
     mockSystemTheme(false);
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     const entries = ["one", "two"].map((name, index) => ({
@@ -386,11 +386,15 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "/work/one" }));
     expect(await screen.findByRole("tab", { name: "已开启", selected: true })).toBeVisible();
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryId: 1 }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryId: 1, query: { state: "open" } }));
     const callsBefore = invoke.mock.calls.length;
     fireEvent.click(screen.getByRole("tab", { name: "全部", exact: true }));
     expect(screen.getByRole("tab", { name: "全部", selected: true })).toBeVisible();
-    expect(invoke.mock.calls).toHaveLength(callsBefore);
+    expect(invoke.mock.calls).toHaveLength(callsBefore + 1);
+    expect(invoke).toHaveBeenLastCalledWith("discover_github_pull_requests", { repositoryId: 1, query: { state: "all" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("tab", { name: "已开启", exact: true }));
+    expect(invoke.mock.calls).toHaveLength(callsBefore + 1);
 
     fireEvent.click(screen.getByRole("button", { name: "打开仓库 two" }));
     await screen.findByRole("heading", { name: "two" });
@@ -411,7 +415,7 @@ describe("App", () => {
     };
     const review = repositoryReview({ reviewId: "review-42", baseRef: "main", headRef: "feature", headRevision: "head-1", lastOpenedAt: 1, pullRequest: metadata });
     const group: PullRequestGroup = {
-      repository: { owner: metadata.owner, name: metadata.repository }, remoteNames: ["origin"], error: null,
+      repository: { owner: metadata.owner, name: metadata.repository }, remoteNames: ["origin"], page: 1, nextPage: 2, error: null,
       pullRequests: [{ ...metadata, githubUpdatedAt: "2026-10-18T08:00:00Z", base: { ref: "main", sha: "base" }, head: { ref: "feature", sha: "head-1" } }],
     };
     const requests: Array<{ resolve: (groups: PullRequestGroup[]) => void; reject: (reason: Error) => void }> = [];
@@ -441,29 +445,40 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled());
     fireEvent.click(screen.getByRole("tab", { name: "全部", exact: true }));
     const allPullRequests = within(screen.getByRole("tabpanel", { name: "全部" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled());
     manualRefresh = true;
     invoke.mockClear();
 
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    expect(screen.getByRole("button", { name: "正在加载更多" })).toBeDisabled();
+    await act(async () => requests[0].resolve([{ ...group, page: 2, nextPage: null, pullRequests: [{
+      ...group.pullRequests[0], number: 43, title: "Older page", githubUpdatedAt: "2026-10-17T08:00:00Z",
+    }] }]));
+    expect(allPullRequests.getByText("#43 Older page")).toBeVisible();
+    expect(screen.getByText("已到末尾")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "刷新列表" }));
     const refreshing = screen.getByRole("button", { name: "正在刷新列表" });
     expect(refreshing).toBeDisabled();
     expect(allPullRequests.getByText("#42 Original title")).toBeVisible();
     fireEvent.click(refreshing);
-    expect(requests).toHaveLength(1);
-    await act(async () => requests[0].reject(new Error("network unavailable")));
+    expect(requests).toHaveLength(2);
+    await act(async () => requests[1].reject(new Error("network unavailable")));
     expect(allPullRequests.getByText("#42 Original title")).toBeVisible();
     expect(screen.getByText(/network unavailable.*在线元数据可能不是最新/)).toBeVisible();
     expect(screen.getByRole("tab", { name: "全部", selected: true })).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "刷新列表" }));
-    await act(async () => requests[1].resolve([{ ...group, pullRequests: [{
+    await act(async () => requests[2].resolve([{ ...group, pullRequests: [{
       ...group.pullRequests[0], title: "Latest title", state: "merged", head: { ref: "feature", sha: "head-2" },
     }] }]));
     expect(allPullRequests.getByText("#42 Latest title")).toBeVisible();
     expect(screen.getByRole("tab", { name: "全部", selected: true })).toBeVisible();
+    expect(allPullRequests.queryByText("#43 Older page")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加载更多" })).toBeEnabled();
     expect(invoke.mock.calls).toEqual([
-      ["discover_github_pull_requests", { repositoryId: 25 }],
-      ["discover_github_pull_requests", { repositoryId: 25 }],
+      ["discover_github_pull_requests", { repositoryId: 25, query: { state: "all", pages: [{ repository: group.repository, page: 2 }] } }],
+      ["discover_github_pull_requests", { repositoryId: 25, query: { state: "all" } }],
+      ["discover_github_pull_requests", { repositoryId: 25, query: { state: "all" } }],
     ]);
     fireEvent.click(screen.getByRole("button", { name: /继续审核 #42/ }));
     await openOverview();
@@ -491,7 +506,7 @@ describe("App", () => {
         kind: "ready", overview: { repository: entry, reviews: [] },
       });
       if (command === "discover_github_pull_requests") return Promise.resolve([{
-        repository, remoteNames: ["origin"], pullRequests: [pullRequest], error: null,
+        repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [pullRequest], error: null,
       }]);
       if (command === "open_pull_request_review") return Promise.resolve({
         reviewId: "review-42", baseRef: "main", baseRevision: "base-sha",
@@ -550,7 +565,7 @@ describe("App", () => {
         kind: "ready", overview: { repository: entry, reviews: [] },
       });
       if (command === "discover_github_pull_requests") return Promise.resolve([{
-        repository, remoteNames: ["origin"], pullRequests: [{
+        repository, remoteNames: ["origin"], page: 1, nextPage: null, pullRequests: [{
           ...pullRequest, head: { ref: "feature", sha: "head-2" },
         }], error: null,
       }]);

@@ -125,6 +125,40 @@ The GitHub App uses only:
 - Metadata: read;
 - Pull requests: read.
 
+Discovery is a bounded observation, not a complete historical inventory. Each Repository
+Overview starts with an Open query. Open, Closed, Merged, and All keep independent loaded
+results and page positions within that overview; Closed excludes merged Pull Requests and
+an unclosed Draft remains Open. Entering a previously unqueried state reads its first page.
+Switching away invalidates its in-flight result; returning to a completed query reuses its
+loaded results until an explicit refresh or GitHub Identity change.
+
+Each action reads at most one page of 30 metadata records per selected, de-duplicated
+GitHub repository, sorted by GitHub update time descending. The REST Pull Requests list
+endpoint preserves anonymous reads and the existing read-only permissions. Open and All
+use their corresponding API states; Closed and Merged read `state=closed` and distinguish
+`merged_at` in the returned metadata. A page with no matching lifecycle entries does not
+trigger another request. The response's `Link` next relation determines whether more can
+be loaded, even when the current page has no matching rows. Discovery never follows a
+server-provided URL to a different endpoint.
+
+Load more appends one page for each successful source with a next page. Retry requests
+only failed sources at their failed page; a source failure does not prevent other sources
+from advancing. Refresh preserves the selected state and available rows while rereading
+all current sources from page one. A successful source replaces its previously loaded
+pages; a failed source retains its rows and records page one for a replacing retry.
+Sources removed from the Repository's remotes disappear on refresh. PR identities are
+de-duplicated across loaded pages, preserving the newest observed metadata, and the UI
+sorts the loaded rows by GitHub update time. As with any mutable page-number list,
+concurrent GitHub changes can move entries between pages; refresh restarts the observation.
+
+Unrequested pages and failed requests are never presented as a complete empty result or
+end of results. Persisted Pull Request Reviews remain locally available and can be continued
+regardless of online pagination. Discovery, pagination, and refresh neither create a Review
+nor alter an open Review Snapshot.
+
+API references: [List pull requests](https://docs.github.com/en/rest/pulls/pulls#list-pull-requests)
+and [REST pagination](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api).
+
 Anonymous discovery remains available for public repositories. Device Flow and stored
 GitHub credentials enable private Pull Request discovery. GitHub credentials are used
 only for GitHub API operations and are never passed to Core Git.

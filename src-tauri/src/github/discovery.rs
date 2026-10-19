@@ -55,35 +55,110 @@ pub struct PullRequestGroup {
     pub remote_names: Vec<String>,
     pub pull_requests: Vec<DiscoveredPullRequest>,
     pub error: Option<String>,
+    pub page: u32,
+    /// 成功时指向后续页，失败时指向需要重试的原页；只有成功且为空才表示末尾。
+    pub next_page: Option<u32>,
 }
 
-/// 扫描 Repository 的全部 remotes，按 GitHub repository 去重并列出 Pull Requests。
+/// 用户选择的生命周期查询；Closed 与 Merged 共享 GitHub 的 closed 列表页。
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PullRequestStateFilter {
+    Open,
+    Closed,
+    Merged,
+    All,
+}
+
+impl PullRequestStateFilter {
+    /// 将产品筛选转换为 REST 支持的状态；合并状态由页面元数据继续区分。
+    fn api_state(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed | Self::Merged => "closed",
+            Self::All => "all",
+        }
+    }
+}
+
+/// 为一个仍在 remotes 中的 GitHub repository 请求一个明确页码。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestPageRequest {
+    pub repository: GitHubRepository,
+    pub page: u32,
+}
+
+/// 一次有界 Discovery；不传 pages 时读取全部去重来源的首页。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestDiscoveryQuery {
+    pub state: PullRequestStateFilter,
+    pub pages: Option<Vec<PullRequestPageRequest>>,
+}
+
+/// 扫描 remotes 后，每个选定的 GitHub repository 最多请求一页协作元数据。
 pub async fn discover_pull_requests(
     repository_path: &Path,
     api_base_url: &str,
     access_token: Option<SecretString>,
+    query: PullRequestDiscoveryQuery,
 ) -> Result<Vec<PullRequestGroup>, String> {
+    let mut requested_pages = BTreeMap::new();
+    if let Some(pages) = &query.pages {
+        for request in pages {
+            if request.page == 0
+                || requested_pages
+                    .insert(
+                        request.repository.identity().to_ascii_lowercase(),
+                        request.page,
+                    )
+                    .is_some()
+            {
+                return Err("每个 GitHub repository 只能请求一个大于零的页码。".to_owned());
+            }
+        }
+    }
     let repositories = github_repositories(repository_path)?;
     let client = Client::builder()
         .user_agent("Narrant/0.1")
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|_| "GitHub discovery client 不可用。".to_owned())?;
     let mut groups = Vec::with_capacity(repositories.len());
     for (repository, remote_names) in repositories.into_values() {
-        let result =
-            list_pull_requests(&client, api_base_url, &repository, access_token.as_ref()).await;
+        let page = match &query.pages {
+            None => 1,
+            Some(_) => match requested_pages.get(&repository.identity()) {
+                Some(page) => *page,
+                None => continue,
+            },
+        };
+        let result = list_pull_requests(
+            &client,
+            api_base_url,
+            &repository,
+            access_token.as_ref(),
+            query.state,
+            page,
+        )
+        .await;
         groups.push(match result {
-            Ok(pull_requests) => PullRequestGroup {
+            Ok((pull_requests, next_page)) => PullRequestGroup {
                 repository,
                 remote_names,
                 pull_requests,
                 error: None,
+                page,
+                next_page,
             },
             Err(error) => PullRequestGroup {
                 repository,
                 remote_names,
                 pull_requests: Vec::new(),
                 error: Some(error),
+                page,
+                next_page: Some(page),
             },
         });
     }
@@ -254,49 +329,88 @@ fn normalize_github_remote(url: &str) -> Option<GitHubRepository> {
     })
 }
 
-/// 分页调用 Pull Requests list endpoint；这里不访问任何代码内容 endpoint。
+/// 只读取指定的一页，不为填满筛选结果追读下一页，也不访问代码内容 endpoint。
 async fn list_pull_requests(
     client: &Client,
     api_base_url: &str,
     repository: &GitHubRepository,
     access_token: Option<&SecretString>,
-) -> Result<Vec<DiscoveredPullRequest>, String> {
+    state: PullRequestStateFilter,
+    page: u32,
+) -> Result<(Vec<DiscoveredPullRequest>, Option<u32>), String> {
     let endpoint = format!(
         "{}/repos/{}/{}/pulls",
         api_base_url.trim_end_matches('/'),
         repository.owner,
         repository.name
     );
-    let mut result = Vec::new();
-    for page in 1_u16..=100 {
-        let mut request = client.get(&endpoint).query(&[
-            ("state", "all".to_owned()),
-            ("per_page", "100".to_owned()),
+    let mut request = client
+        .get(&endpoint)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .query(&[
+            ("state", state.api_state().to_owned()),
+            ("sort", "updated".to_owned()),
+            ("direction", "desc".to_owned()),
+            ("per_page", "30".to_owned()),
             ("page", page.to_string()),
         ]);
-        if let Some(token) = access_token {
-            request = request.bearer_auth(token.expose_secret());
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|_| "当前无法连接 GitHub，请检查网络后重试。".to_owned())?;
-        if !response.status().is_success() {
-            return Err(map_discovery_error(
-                response.status().as_u16(),
-                access_token.is_some(),
-            ));
-        }
-        let page_items: Vec<PullRequestListItem> = response
-            .json()
-            .await
-            .map_err(|_| "GitHub 返回了无法识别的 Pull Request metadata。".to_owned())?;
-        if page_items.is_empty() {
-            return Ok(result);
-        }
-        result.extend(page_items.into_iter().map(DiscoveredPullRequest::from));
+    if let Some(token) = access_token {
+        request = request.bearer_auth(token.expose_secret());
     }
-    Err("GitHub Pull Request 分页超过安全上限，请缩小查询范围。".to_owned())
+    let response = request
+        .send()
+        .await
+        .map_err(|_| "当前无法连接 GitHub，请检查网络后重试。".to_owned())?;
+    if !response.status().is_success() {
+        return Err(map_discovery_error(
+            response.status().as_u16(),
+            access_token.is_some(),
+        ));
+    }
+    // 只读取 Link 的 next 关系，不访问其中的 URL，避免把凭据发往非 GitHub 来源。
+    let has_next = response
+        .headers()
+        .get_all(reqwest::header::LINK)
+        .iter()
+        .any(|header| {
+            header.to_str().is_ok_and(|value| {
+                value.split(',').any(|link| {
+                    link.split(';').skip(1).any(|parameter| {
+                        parameter
+                            .trim()
+                            .strip_prefix("rel=")
+                            .is_some_and(|relations| {
+                                relations
+                                    .trim_matches('"')
+                                    .split_whitespace()
+                                    .any(|rel| rel == "next")
+                            })
+                    })
+                })
+            })
+        });
+    let next_page = if has_next {
+        Some(
+            page.checked_add(1)
+                .ok_or_else(|| "GitHub 页码超出支持范围。".to_owned())?,
+        )
+    } else {
+        None
+    };
+    let page_items: Vec<PullRequestListItem> = response
+        .json()
+        .await
+        .map_err(|_| "GitHub 返回了无法识别的 Pull Request metadata。".to_owned())?;
+    let mut items = BTreeMap::<u64, DiscoveredPullRequest>::new();
+    for item in page_items.into_iter().map(DiscoveredPullRequest::from) {
+        if items
+            .get(&item.number)
+            .is_none_or(|previous| previous.github_updated_at <= item.github_updated_at)
+        {
+            items.insert(item.number, item);
+        }
+    }
+    Ok((items.into_values().collect(), next_page))
 }
 
 /// GitHub Pull Requests list endpoint 的最小只读响应模型。

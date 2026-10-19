@@ -72,6 +72,14 @@ export const resources = {
       sidebar: "仓库侧边栏", tasks: "仓库任务", tabs: { pullRequests: "Pull Requests", branches: "本地分支", history: "审核历史" },
       refreshing: "正在后台刷新 Pull Requests。", stale: "在线元数据可能不是最新。", updateAvailable: "有更新",
       refreshPullRequests: "刷新列表", refreshingPullRequests: "正在刷新列表",
+      loadingPullRequests: "正在加载 Pull Request…",
+      pullRequestPagination: {
+        loadMore: "加载更多", loadingMore: "正在加载更多", end: "已到末尾",
+        partial: "当前仅显示已加载的结果。",
+        noLoadedMatches: "已加载的结果中没有{{state}}的 Pull Request",
+        noLoadedResults: "已加载的结果中暂无 Pull Request",
+        incomplete: "结果尚未完整加载，可以继续加载或重试失败的来源。",
+      },
       draft: "草稿", noPullRequests: "没有可审核的 Pull Request", noPullRequestsDescription: "当前 GitHub 仓库暂时没有可审核的 Pull Request。",
       pullRequestFilter: {
         label: "状态", accessibleLabel: "Pull Request 状态", open: "已开启", closed: "已关闭", merged: "已合并", all: "全部",
@@ -235,6 +243,14 @@ export const resources = {
       sidebar: "Repository sidebar", tasks: "Repository tasks", tabs: { pullRequests: "Pull Requests", branches: "Local branches", history: "Review history" },
       refreshing: "Refreshing Pull Requests in the background.", stale: "Online metadata may be out of date.", updateAvailable: "Update available",
       refreshPullRequests: "Refresh list", refreshingPullRequests: "Refreshing list",
+      loadingPullRequests: "Loading Pull Requests…",
+      pullRequestPagination: {
+        loadMore: "Load more", loadingMore: "Loading more", end: "End of results",
+        partial: "Showing loaded results only.",
+        noLoadedMatches: "No {{state}} Pull Requests in loaded results",
+        noLoadedResults: "No Pull Requests in loaded results",
+        incomplete: "Results are incomplete. Load more or retry failed sources.",
+      },
       draft: "Draft", noPullRequests: "No Pull Requests to review", noPullRequestsDescription: "The current GitHub repositories have no Pull Requests to review.",
       pullRequestFilter: {
         label: "Status", accessibleLabel: "Pull Request status", open: "Open", closed: "Closed", merged: "Merged", all: "All",

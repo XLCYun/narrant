@@ -6,7 +6,7 @@ import type { PullRequestGroup } from "@/lib/review-types";
 
 const groups: PullRequestGroup[] = [{
   repository: { owner: "Octo-Org", name: "Octo-Repo" },
-  remoteNames: ["origin"],
+  remoteNames: ["origin"], page: 1, nextPage: null,
   error: null,
   pullRequests: [{
     number: 42,
@@ -30,7 +30,7 @@ describe("Tauri Pull Request Discovery application adapter", () => {
       invokeCancellable: vi.fn(),
     } as unknown as TypedTauriTransport);
 
-    await expect(adapter.discover(17)).resolves.toEqual(groups);
-    expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryId: 17 });
+    await expect(adapter.discover(17, { state: "merged", pages: [{ repository: groups[0].repository, page: 2 }] })).resolves.toEqual(groups);
+    expect(invoke).toHaveBeenCalledWith("discover_github_pull_requests", { repositoryId: 17, query: { state: "merged", pages: [{ repository: groups[0].repository, page: 2 }] } });
   });
 });

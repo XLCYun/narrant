@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RepositoryOverview } from "@/components/repository-overview";
 import { Button } from "@/components/ui/button";
-import type { DiscoveredPullRequest, PullRequestMetadata, RepositoryReviewSummary } from "@/lib/review-types";
+import { usePullRequestDiscoveryLifecycle } from "@/github/use-pull-request-discovery-lifecycle";
+import type { PullRequestDiscoveryApplicationAdapter } from "@/github/pull-request-discovery-application";
+import type { DiscoveredPullRequest, PullRequestDiscoveryQuery, PullRequestGroup, PullRequestMetadata, RepositoryReviewSummary } from "@/lib/review-types";
 
 /** 用代表性生命周期与标题长度覆盖筛选、离线和重试场景。 */
 type PreviewMode = "mixed" | "closed-only" | "offline" | "retry" | "loading" | "empty" | "failed" | "first-load";
@@ -42,50 +44,101 @@ const savedReviews = [
   previewReview(closedPullRequest, "closed"), previewReview(mergedPullRequest, "merged"),
 ];
 
-/** 用可手动完成的请求验收刷新、失败恢复和筛选保留，不访问真实业务数据。 */
+/** 保存可手动完成的请求，让浏览器直接验收生产 lifecycle 的竞态与重试。 */
+type PendingRequest = {
+  id: number;
+  query: PullRequestDiscoveryQuery;
+  resolve: (groups: PullRequestGroup[]) => void;
+  reject: (reason: Error) => void;
+};
+
+/** 根据 REST 页语义生成有限的预览数据，Closed 首页面含 Merged 但没有 Closed。 */
+function previewPage(query: PullRequestDiscoveryQuery, mode: PreviewMode, initialFailure = false): PullRequestGroup[] {
+  const repository = { owner: "example", name: "narrant" };
+  const sources = query.pages ?? [
+    { repository, page: 1 },
+    ...(mode === "retry" ? [{ repository: { owner: "example", name: "upstream" }, page: 1 }] : []),
+  ];
+  return sources.map(({ repository: source, page }) => {
+    const failed = initialFailure && source.name === "upstream";
+    const first = query.state === "open" ? [openPullRequest, draftPullRequest]
+      : query.state === "closed" ? [mergedPullRequest]
+      : query.state === "merged" ? [mergedPullRequest, closedPullRequest]
+      : [openPullRequest, draftPullRequest, mergedPullRequest];
+    const empty = mode === "empty" || (mode === "closed-only" && query.state === "open");
+    return {
+      repository: source, remoteNames: [source.name === "upstream" ? "upstream" : "origin"], page,
+      nextPage: failed ? page : empty || page >= 2 ? null : 2,
+      error: failed ? "GitHub 暂时无法连接" : null,
+      pullRequests: failed || empty ? [] : page === 1 ? first : [query.state === "closed" || query.state === "all"
+        ? closedPullRequest : previewPullRequest(205, "Older loaded result", query.state === "merged" ? "merged" : "open")],
+    };
+  });
+}
+
+/** 使用真实分页 lifecycle 与可控 adapter，不访问 Tauri、GitHub 或个人业务数据。 */
 export function PullRequestsPreview({ mode = "mixed" }: { mode?: PreviewMode }) {
   const { i18n } = useTranslation();
-  const [refreshed, setRefreshed] = useState(false);
   const [opened, setOpened] = useState<string>();
-  const [loading, setLoading] = useState(mode === "loading" || mode === "first-load");
+  const [pending, setPending] = useState<PendingRequest[]>([]);
   const [requestCount, setRequestCount] = useState(0);
-  const [error, setError] = useState<string | undefined>(mode === "offline" ? "当前离线" : mode === "failed" ? "GitHub 暂时无法连接" : undefined);
-  const initiallyEmpty = ["empty", "failed", "first-load"].includes(mode) && !refreshed;
-  const pullRequests = mode === "closed-only" ? [closedPullRequest] : [
-    { ...openPullRequest, state: refreshed ? "merged" : "open" }, draftPullRequest, closedPullRequest, mergedPullRequest,
-  ];
-  const reviews = initiallyEmpty ? [] : mode === "offline" ? savedReviews : mode === "closed-only" ? [savedReviews[2]] : [savedReviews[0]];
-  const groups = initiallyEmpty || (mode === "offline" && !refreshed) ? [] : [{
-    repository: { owner: "example", name: "narrant" }, remoteNames: ["origin"], pullRequests, error: null,
-  }];
+  const readyRef = useRef(false);
+  const idRef = useRef(0);
+  const adapter = useMemo<PullRequestDiscoveryApplicationAdapter>(() => ({
+    /** 首次可立即显示代表性结果；后续由预览控制区逐个完成，支持故意乱序。 */
+    discover: (_repositoryId, query) => {
+      setRequestCount((count) => count + 1);
+      if (!readyRef.current && !["loading", "first-load"].includes(mode)) {
+        return Promise.resolve().then(() => {
+          readyRef.current = true;
+          if (mode === "offline" || mode === "failed") throw new Error("GitHub 暂时无法连接");
+          return previewPage(query, mode, mode === "retry");
+        });
+      }
+      return new Promise((resolve, reject) => {
+        const id = ++idRef.current;
+        setPending((requests) => [...requests, { id, query, resolve, reject }]);
+      });
+    },
+  }), [mode]);
+  const discovery = usePullRequestDiscoveryLifecycle(adapter, { enabled: true, repositoryId: 1, signedIn: mode !== "offline" });
+  const loading = ["loading", "refreshing", "loading-more"].includes(discovery.transition.kind);
+  const reviews = ["empty", "failed", "first-load"].includes(mode) ? [] : mode === "offline" ? savedReviews : mode === "closed-only" ? [savedReviews[2]] : [savedReviews[0]];
   return <>
     <RepositoryOverview
       repositoryName="narrant"
       repositoryPath="/work/narrant"
       reviews={reviews}
-      pullRequestGroups={mode === "retry" && !refreshed ? [...groups, {
-        repository: { owner: "example", name: "upstream" }, remoteNames: ["upstream"], pullRequests: [], error: "GitHub 暂时无法连接",
-      }] : groups}
+      pullRequestGroups={discovery.groups}
       discoveryLoading={loading}
-      discoveryError={error}
+      discoveryLoadingMore={discovery.transition.kind === "loading-more"}
+      discoveryComplete={discovery.complete}
+      discoveryError={discovery.error?.detail}
+      pullRequestFilter={discovery.filter}
+      onPullRequestFilterChange={discovery.selectFilter}
       githubConnected={mode !== "offline"}
       localBranches={<p>本地分支预览</p>}
-      onRetryDiscovery={() => {
-        setRequestCount((count) => count + 1);
-        setLoading(true);
-        setError(undefined);
-      }}
+      onRefreshDiscovery={() => void discovery.refresh()}
+      onLoadMoreDiscovery={() => void discovery.loadMore()}
+      onRetryDiscovery={() => void discovery.retry()}
       onConnectGitHub={() => setOpened("连接 GitHub")}
       onOpenReview={(review) => setOpened(`继续审核 ${review.reviewId}`)}
       onOpenPullRequest={(_, pullRequest) => setOpened(`开始审核 #${pullRequest.number}`)}
     />
     <div className="mt-6 flex flex-wrap items-center gap-3 border-t pt-4" aria-label="预览请求控制">
-      <span className="text-sm text-muted-foreground">手动请求次数：{requestCount}</span>
+      <span className="text-sm text-muted-foreground">请求次数：{requestCount}</span>
       <Button variant="outline" size="sm" onClick={() => void i18n.changeLanguage(i18n.resolvedLanguage === "en" ? "zh-CN" : "en")}>中文 / English</Button>
-      {loading && <>
-        <Button variant="outline" size="sm" onClick={() => { setRefreshed(true); setError(undefined); setLoading(false); }}>模拟刷新成功</Button>
-        <Button variant="outline" size="sm" onClick={() => { setError("GitHub 暂时无法连接"); setLoading(false); }}>模拟刷新失败</Button>
-      </>}
+      {pending.map((request) => <div key={request.id} className="flex flex-wrap items-center gap-2 text-sm">
+        <span>请求 {request.id}：{request.query.state} / {request.query.pages?.map((page) => `${page.repository.name}:${page.page}`).join(", ") ?? "首页"}</span>
+        <Button variant="outline" size="sm" onClick={() => {
+          request.resolve(previewPage(request.query, mode));
+          setPending((requests) => requests.filter((entry) => entry.id !== request.id));
+        }}>完成请求 {request.id}</Button>
+        <Button variant="outline" size="sm" onClick={() => {
+          request.reject(new Error("GitHub 暂时无法连接"));
+          setPending((requests) => requests.filter((entry) => entry.id !== request.id));
+        }}>拒绝请求 {request.id}</Button>
+      </div>)}
     </div>
     {opened && <p className="mt-4 text-sm text-muted-foreground" role="status">预览动作：{opened}</p>}
   </>;
