@@ -43,14 +43,13 @@ pub(super) struct Session {
 }
 
 impl Session {
-    /// 启动支持包的公共 CLI，工作目录和临时目录均为仓库外 scratch。
+    /// 直接启动对应语言分析器，工作目录和临时目录均为仓库外 scratch。
     pub(super) fn start(analyzer: &CodeGraphAnalyzer, scratch: &Path) -> Result<Self> {
         let mut command = Command::new(&analyzer.executable);
         #[cfg(test)]
         command.args(&analyzer.test_prefix_args);
         command
-            .args(["analyze", "--pack", &analyzer.id, "--pack-root"])
-            .arg(&analyzer.root)
+            .arg("analyze")
             .current_dir(scratch)
             .env("TMPDIR", scratch)
             .env("TMP", scratch)

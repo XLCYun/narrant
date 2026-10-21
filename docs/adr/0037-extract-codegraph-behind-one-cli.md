@@ -1,8 +1,11 @@
 ---
-status: accepted
+status: superseded-in-part
 ---
 
 # 通过统一 CLI 使用独立 CodeGraph
+
+2026-10-21：[ADR-0038](0038-call-independent-language-analyzers.md) 替代本记录中的总 CLI
+和单独 CLI 发布物设计。独立仓库、stdio 协议、分发归属与图差异留在 Narrant 的决定继续有效。
 
 多语言图生成需要供 Narrant 之外的本地工具复用，因此将 helper、分析 Host、目标 SDK
 探测和构图验证迁入公开的 `XLCYun/CodeGraph`。所有消费者通过 CLI/stdio JSON 使用同一

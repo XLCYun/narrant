@@ -116,7 +116,7 @@ jobs:
       - name: Prepare offline standard-library fixture metadata
         if: inputs.language == 'all' || inputs.language == 'rust'
         run: node scripts/language-packs/prepare-rust-native-tests.mjs --prepare
-      - name: Verify installed public CLI, all graph differences, and Review DTO lifecycle
+      - name: Verify installed language analyzers, all graph differences, and Review DTO lifecycle
         run: node scripts/codegraph/verify-consumer.mjs codegraph-packs --language "${{ inputs.language || 'all' }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: success() && inputs.upload_artifacts

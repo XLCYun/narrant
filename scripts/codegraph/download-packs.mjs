@@ -38,8 +38,8 @@ export function validateManifest(bytes, id, target) {
     if (Object.keys(file).sort().join() !== ['path','size','sha256','executable'].sort().join() || !safePath(file.path) || !/^(bin|control|runtime|licenses)\//.test(file.path) || names.has(file.path.toLowerCase()) || !Number.isSafeInteger(file.size) || file.size < 0 || !/^[0-9a-f]{64}$/.test(file.sha256) || typeof file.executable !== 'boolean' || (size += file.size) > limits.unpacked) throw new Error('Invalid CodeGraph file inventory');
     names.add(file.path.toLowerCase());
   }
-  const cli = target.startsWith('x86_64-pc-windows') ? 'bin/codegraph.exe' : 'bin/codegraph';
-  if (!manifest.files.some(file => file.path === cli && file.executable) || !manifest.files.some(file => file.path === 'control/codegraph.json')) throw new Error('Missing public CLI or descriptor');
+  const entry = 'bin/codegraph-' + id + (target === 'x86_64-pc-windows-msvc' ? '.exe' : '');
+  if (!manifest.files.some(file => file.path === entry && file.executable) || !manifest.files.some(file => file.path === 'control/codegraph.json')) throw new Error('Missing public analyzer or descriptor');
   return manifest;
 }
 
@@ -97,9 +97,36 @@ export async function verifyAndExtract(manifest, archive, root) {
   await tar.x({ file: archive, cwd: root, strict: true, preservePaths: false });
   for (const file of manifest.files) {
     const destination = path.join(root, file.path);
-    if (!(await fs.lstat(destination)).isFile() || await digest(destination) !== file.sha256) throw new Error('Extracted file checksum mismatch');
     if (process.platform !== 'win32') await fs.chmod(destination, file.executable ? 0o755 : 0o644);
   }
+  await verifyInstalled(manifest, root);
+}
+
+/** 已解包内容只有逐项通过类型、完整清单、大小、摘要和描述符校验后才可复用。 */
+async function verifyInstalled(manifest, root) {
+  if (!(await fs.lstat(root)).isDirectory()) throw new Error('Installed package is not a directory');
+  const files = new Map(manifest.files.map(file => [file.path, file]));
+  const directories = new Set();
+  for (const file of manifest.files) {
+    const parts = file.path.split('/');
+    for (let end = 1; end < parts.length; end++) directories.add(parts.slice(0, end).join('/'));
+  }
+  const seen = new Set();
+  /** 只进入 manifest 文件的父目录，拒绝链接和额外内容。 */
+  async function inspect(relative) {
+    for (const entry of await fs.readdir(path.join(root, relative), { withFileTypes: true })) {
+      const name = relative ? relative + '/' + entry.name : entry.name;
+      if (entry.isDirectory() && directories.has(name)) { await inspect(name); continue; }
+      const file = files.get(name);
+      if (!entry.isFile() || !file) throw new Error('Installed entries differ from manifest');
+      const destination = path.join(root, name);
+      const stat = await fs.lstat(destination);
+      if (!stat.isFile() || stat.size !== file.size || await digest(destination) !== file.sha256 || (process.platform !== 'win32' && (stat.mode & 0o777) !== (file.executable ? 0o755 : 0o644))) throw new Error('Extracted file checksum or mode mismatch');
+      seen.add(name);
+    }
+  }
+  await inspect('');
+  if (seen.size !== files.size) throw new Error('Missing installed files');
   const descriptorPath = path.join(root, 'control/codegraph.json');
   if ((await fs.stat(descriptorPath)).size > 1024 * 1024) throw new Error('Public descriptor exceeds limit');
   const descriptorBytes = await fs.readFile(descriptorPath);
@@ -113,6 +140,41 @@ export async function verifyAndExtract(manifest, archive, root) {
   if (Object.keys(descriptor).sort().join() !== Object.keys(expected).sort().join() || Object.entries(expected).some(([key,value]) => descriptor[key] !== value)) throw new Error('Public descriptor identity mismatch');
 }
 
+/** 文件存在不代表下载完成；只有与本次发布摘要和完整解包内容一致的包可以复用。 */
+async function cachedPackage(packageRoot, id, target, sums) {
+  try {
+    if (!(await fs.lstat(packageRoot)).isDirectory()) return;
+    for (const [name, limit] of [['manifest.json', limits.manifest], ['pack.tar.gz', limits.archive]]) {
+      const file = path.join(packageRoot, name);
+      const stat = await fs.lstat(file);
+      if (!stat.isFile() || stat.size > limit || await digest(file) !== sums.get(`${id}-${target}-${name}`)) return;
+    }
+    const manifest = validateManifest(await fs.readFile(path.join(packageRoot, 'manifest.json')), id, target);
+    if ((await fs.stat(path.join(packageRoot, 'pack.tar.gz'))).size !== manifest.archiveSize || manifest.archiveSha256 !== sums.get(`${id}-${target}-pack.tar.gz`)) return;
+    await verifyInstalled(manifest, path.join(packageRoot, 'installed'));
+    return manifest;
+  } catch { return; }
+}
+
+/** 同一文件系统内整包替换；安装失败时恢复旧目录，恢复失败则保留备份供诊断。 */
+async function promotePackage(staged, destination, backup) {
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  let previous = false;
+  try { await fs.rename(destination, backup); previous = true; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try { await fs.rename(staged, destination); }
+  catch (error) {
+    if (previous) {
+      try { await fs.rename(backup, destination); }
+      catch (restoreError) {
+        throw Object.assign(new Error(`Cannot restore previous package; preserved at ${backup}`, { cause: new AggregateError([error, restoreError]) }), { preserveTemporary: true });
+      }
+    }
+    throw error;
+  }
+  if (previous) await fs.rm(backup, { recursive: true, force: true });
+}
+
 /** 只获取目录声明的已发布固定版本；未发布和缺失 release 均使 CI 硬失败。 */
 export async function downloadPacks(output) {
   validateCatalog(JSON.parse(await fs.readFile(path.join(repository, 'resources/language-support-packs.json'))));
@@ -122,6 +184,7 @@ export async function downloadPacks(output) {
   await fs.mkdir(output, { recursive: true });
   const temporary = await fs.mkdtemp(path.join(output, '.download-'));
   const candidates = [];
+  let preserveTemporary = false;
   try {
     const sumfile = path.join(temporary, 'SHA256SUMS');
     await download(`${origin}/SHA256SUMS`, sumfile, 64 * 1024);
@@ -129,23 +192,33 @@ export async function downloadPacks(output) {
     let commit;
     for (const id of ids) {
       const packageRoot = path.join(output, id, '0.1.0', target);
-      await fs.mkdir(packageRoot, { recursive: true });
-      for (const name of ['manifest.json', 'pack.tar.gz']) {
-        const asset = `${id}-${target}-${name}`;
-        const destination = path.join(packageRoot, name);
-        await download(`${origin}/${asset}`, destination, name === 'manifest.json' ? limits.manifest : limits.archive);
-        if (await digest(destination) !== sums.get(asset)) throw new Error(`Release checksum mismatch: ${asset}`);
+      let manifest = await cachedPackage(packageRoot, id, target, sums);
+      if (!manifest) {
+        // 旧索引不能继续指向未通过复验、即将重建的内容。
+        await fs.rm(path.join(output, 'candidates.json'), { force: true });
+        const staged = path.join(temporary, id);
+        await fs.mkdir(staged);
+        for (const name of ['manifest.json', 'pack.tar.gz']) {
+          const asset = `${id}-${target}-${name}`;
+          const destination = path.join(staged, name);
+          await download(`${origin}/${asset}`, destination, name === 'manifest.json' ? limits.manifest : limits.archive);
+          if (await digest(destination) !== sums.get(asset)) throw new Error(`Release checksum mismatch: ${asset}`);
+        }
+        manifest = validateManifest(await fs.readFile(path.join(staged, 'manifest.json')), id, target);
+        if (commit && commit !== manifest.sourceCommit) throw new Error('Release packages have inconsistent source commits');
+        await verifyAndExtract(manifest, path.join(staged, 'pack.tar.gz'), path.join(staged, 'installed'));
+        await promotePackage(staged, packageRoot, path.join(temporary, id + '-previous'));
       }
-      const manifest = validateManifest(await fs.readFile(path.join(packageRoot, 'manifest.json')), id, target);
       if (commit && commit !== manifest.sourceCommit) throw new Error('Release packages have inconsistent source commits');
       commit = manifest.sourceCommit;
-      const root = path.join(output, 'installed', id);
-      await fs.mkdir(path.dirname(root), { recursive: true });
-      await verifyAndExtract(manifest, path.join(packageRoot, 'pack.tar.gz'), root);
+      const root = path.join(packageRoot, 'installed');
       candidates.push({ id, version: manifest.version, engineVersion: manifest.engineVersion, protocol: manifest.protocol, target, root });
     }
-    await fs.writeFile(path.join(output, 'candidates.json'), JSON.stringify(candidates, null, 2) + '\n');
-  } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+    const index = path.join(temporary, 'candidates.json');
+    await fs.writeFile(index, JSON.stringify(candidates, null, 2) + '\n', { flag: 'wx' });
+    await fs.rename(index, path.join(output, 'candidates.json'));
+  } catch (error) { preserveTemporary = error.preserveTemporary === true; throw error; }
+  finally { if (!preserveTemporary) await fs.rm(temporary, { recursive: true, force: true }); }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await downloadPacks(process.argv[2] ?? 'codegraph-packs');

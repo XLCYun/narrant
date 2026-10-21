@@ -285,14 +285,20 @@ pub(super) fn validate_manifest(
         .id
         .required(target)
         .iter()
-        .any(|path| !names.contains(path))
+        .any(|path| !names.contains(path.as_str()))
     {
         return Err("语言支持包缺少必需入口".into());
     }
-    if manifest.files.iter().any(|file| {
-        (file.path == "bin/codegraph" || file.path == "bin/codegraph.exe") && !file.executable
-    }) {
-        return Err("CodeGraph CLI 必须可执行".into());
+    let entry = crate::structure_review::codegraph_client::public_entry(
+        key.id.slug(),
+        target == "x86_64-pc-windows-msvc",
+    );
+    if manifest
+        .files
+        .iter()
+        .any(|file| file.path == entry && !file.executable)
+    {
+        return Err("CodeGraph 语言分析器必须可执行".into());
     }
     Ok(())
 }

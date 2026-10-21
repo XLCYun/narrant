@@ -9,7 +9,8 @@ if (process.argv[2] === 'descendant') {
   fs.writeFileSync(process.env.CODEGRAPH_TEST_PIDS, `${process.pid}\n${child.pid}`);
   setInterval(() => {}, 1000);
 } else {
-  const pack = process.argv[process.argv.indexOf('--pack') + 1];
+  if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['analyze'])) throw new Error('Public analyzer accepts only analyze');
+  const pack = 'typescript-javascript';
   const protocol = 'codegraph.analyzer/1';
   const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
   if (scenario === 'silent') setInterval(() => {}, 1000);

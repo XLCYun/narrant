@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 fn fixture(missing_control: bool, executable: bool) -> (Vec<u8>, serde_json::Value) {
     let descriptor = String::from_utf8(super::test_support::descriptor("python")).unwrap();
     let files = [
-        ("bin/codegraph", "CodeGraph fixture"),
+        ("bin/codegraph-python", "CodeGraph fixture"),
         ("control/codegraph.json", descriptor.as_str()),
     ];
     let mut tar = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));

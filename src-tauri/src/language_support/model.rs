@@ -17,7 +17,7 @@ pub(crate) enum PackId {
 }
 
 impl PackId {
-    /// 全部七种语言使用同一公共 CLI 消费入口。
+    /// 全部七种语言分别通过自身分析器入口消费同一公开协议。
     pub const SUPPORTED: &'static [Self] = &[
         Self::Rust,
         Self::Python,
@@ -42,14 +42,13 @@ impl PackId {
     }
 
     /// 当前包的必需入口，归档必须提供这些普通文件。
-    pub fn required(self, target: &str) -> Vec<&'static str> {
+    pub fn required(self, target: &str) -> Vec<String> {
         vec![
-            "control/codegraph.json",
-            if target == "x86_64-pc-windows-msvc" {
-                "bin/codegraph.exe"
-            } else {
-                "bin/codegraph"
-            },
+            "control/codegraph.json".into(),
+            crate::structure_review::codegraph_client::public_entry(
+                self.slug(),
+                target == "x86_64-pc-windows-msvc",
+            ),
         ]
     }
 }

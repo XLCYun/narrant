@@ -7,16 +7,20 @@ Narrant 从 `XLCYun/CodeGraph` 消费固定 `v0.1.0`，包与引擎版本均为 
 
 ## 公共边界
 
-应用从已持有使用租约的包根启动 `bin/codegraph[.exe] analyze --pack <id> --pack-root <root>`。
+应用从已持有使用租约的包根启动 `bin/codegraph-<id>[.exe] analyze`。七个固定 ID 为
+`rust`、`typescript-javascript`、`python`、`java`、`go`、`csharp` 和 `c-cpp`。
+每个入口自带语言身份，消费者不传语言选择器或包根参数。
 它只传源码根、相对文件选集、测试开关与 Rust 依赖范围，验证 ready 的引擎/协议/包身份，
-严格构造返回图，并等待 CLI、嵌套 worker/helper 和管道线程退出后返回。
+严格构造返回图，并等待分析器、嵌套 worker/helper 和管道线程退出后返回。
 Code Graph Difference、Git 两侧准备、Review/Snapshot、工作区保护与界面都留在 Narrant。
 
 公开契约以 CodeGraph 的 [protocol](https://github.com/XLCYun/CodeGraph/blob/main/docs/protocol.md)、
 [distribution](https://github.com/XLCYun/CodeGraph/blob/main/docs/distribution.md) 和
 [pack layout](https://github.com/XLCYun/CodeGraph/blob/main/docs/pack-layout.md) 为准。
 消费者不读取 `control/native.json`，也不装配 helper argv、运行时或 SDK catalog。
-必需入口仅为公共 CLI 和五字段 `control/codegraph.json`；私有文件按 manifest 完整性清单验证。
+必需入口为对应语言的可执行文件和五字段 `control/codegraph.json`；私有文件按 manifest
+完整性清单验证。Narrant 每次显式传入文件选集；省略 `files` 的配置发现能力属于分析器，
+不改变 Narrant 的两侧文件准备、语言路由与图合并。
 
 ## 安装与隔离
 
@@ -25,9 +29,17 @@ Code Graph Difference、Git 两侧准备、Review/Snapshot、工作区保护与�
 `sourceCommit` 与 `sourceDirty: false`，随后有界解包并逐文件验证摘要。
 归档、解包总文件和清单上限分别是 256 MiB、1 GiB、2 MiB。
 
+命令行下载器把每包的清单、归档和 `installed/` 放在同盘临时目录，全部校验通过后整目录
+提升到 `<output>/<id>/0.1.0/<target>`。七包成功后才原子替换 `candidates.json`；下载中断、
+摘要失败或解包失败会清理当次临时内容，可在同一输出目录重试。重试只复用与本次发布摘要、
+逐文件大小/摘要/权限及描述符均一致的完整包；旧下载残片和损坏缓存会重新获取。
+缓存未通过复验时，先移除旧候选索引，避免重建失败后继续暴露无效候选。
+候选 `root` 指向各包内的 `installed/`，不改变下述应用安装目录。
+
 应用数据目录下继续使用 `language-support-packs/installed/<id>/<version>/<target>`，
 暂存位于同盘 `staging`，跨进程使用/安装/删除共用原有 `id-version-target` 锁。
-旧 Narrant 包即使具有相同 ID 和 `0.1.0` 版本，也因缺少 CodeGraph 身份而不可用；
+旧 Narrant 包或只有通用 `bin/codegraph[.exe]` 的旧候选即使具有相同 ID 和 `0.1.0`
+版本，也因缺少当前公开身份或固定语言入口而不可用；
 替换必须取得原锁的独占权限，不能覆盖仍被旧进程使用的目录。
 错误与取消不能返回成功空图；下载失败保留明确重试状态。
 
@@ -71,7 +83,7 @@ Rust 三档与测试开关继续按原语言规范执行。
 ## CI 与发布交接
 
 PR 自动调用 `validate-language-support-packs.yml`，在 GitHub-hosted macOS ARM64 与
-Windows x64 下载精确七包，执行公共 CLI、完整图差异、安装、Review DTO 和退出屏障验收。
+Windows x64 下载精确七包，执行独立语言入口、完整图差异、安装、Review DTO 和退出屏障验收。
 CodeGraph 源码、helper、SDK 工厂与私有协议测试由其自身 CI 负责。
 `Complete CI` 仍要求 quality 和 languages 两组均成功，缺失、取消或跳过均不能放行。
 最终切换发布版本还需要真实远端下载和最新双平台 CI 证据；此前的本机候选结果不能替代。

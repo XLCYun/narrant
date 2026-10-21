@@ -659,7 +659,7 @@ fn mixed_side(
 #[ignore = "require-real-tools: 四个真实 helper 与固定目标平台必须同时可用"]
 fn mixed_repository_real_helper_graph_and_diff() {
     let configs = config();
-    for key in ["go", "java", "csharp", "clang"] {
+    for key in ["go", "java", "csharp", "c-cpp"] {
         assert!(
             configs.contains_key(key),
             "混合验收缺少 {key} 真实 helper 配置"

@@ -28,7 +28,7 @@ fn fixture_for(id: PackId) -> (Vec<u8>, serde_json::Value) {
             0o644
         });
         header.set_cksum();
-        tar.append_data(&mut header, name, content).unwrap();
+        tar.append_data(&mut header, &name, content).unwrap();
         files.push(serde_json::json!({"path":name,"size":content.len(),"sha256":format!("{:x}",Sha256::digest(content)),"executable":name.starts_with("bin/")}));
     }
     let archive = tar.into_inner().unwrap().finish().unwrap();
@@ -66,7 +66,7 @@ async fn installs_complete_pack_and_reuses_it_after_restart() {
         .await
         .unwrap();
     assert_eq!(
-        std::fs::read(lease.path(PackId::Rust).unwrap().join("bin/codegraph")).unwrap(),
+        std::fs::read(lease.path(PackId::Rust).unwrap().join("bin/codegraph-rust")).unwrap(),
         b"test codegraph executable"
     );
     assert_eq!(packs.snapshot().packs[0].phase, PackPhase::Ready);
@@ -654,7 +654,7 @@ async fn old_same_version_install_is_rejected_and_its_usage_lock_blocks_replacem
     assert!(lease
         .path(PackId::Go)
         .unwrap()
-        .join("bin/codegraph")
+        .join("bin/codegraph-go")
         .is_file());
     download.assert_hits(1);
     drop(lease);

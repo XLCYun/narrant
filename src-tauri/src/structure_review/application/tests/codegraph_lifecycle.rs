@@ -80,7 +80,8 @@ async fn real_cli_exit_and_cancellation_preserve_workspace_and_pack_barriers() {
                 crate::child_process::test_support::node_executable(),
                 vec![
                     launcher.into_os_string(),
-                    root.join("bin/codegraph").into_os_string(),
+                    root.join("bin/codegraph-typescript-javascript")
+                        .into_os_string(),
                 ],
                 BTreeMap::from([(
                     "CODEGRAPH_OBSERVED_PID".into(),

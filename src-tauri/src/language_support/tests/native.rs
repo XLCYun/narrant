@@ -96,50 +96,78 @@ async fn unpublished_native_pack_reports_explicit_error() {
     packs.shutdown().await;
 }
 
-/// 公共入口必须在下载前通过清单校验；消费者不依赖 helper 私有文件名。
+/// 七种分析器在两个平台都必须提供自身固定入口，旧总入口和其他语言不能替代。
 #[test]
 fn manifest_requires_public_cli_and_descriptor_on_both_targets() {
-    let id = PackId::TypeScriptJavascript;
-    let key = PackKey {
-        id,
-        version: versions()[&id].clone(),
-    };
-    let syntax = "control/codegraph.json";
-    for target in ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"] {
-        let mut manifest = Manifest {
-            schema_version: 1,
+    for (id, entry) in [
+        (PackId::Rust, "bin/codegraph-rust"),
+        (
+            PackId::TypeScriptJavascript,
+            "bin/codegraph-typescript-javascript",
+        ),
+        (PackId::Python, "bin/codegraph-python"),
+        (PackId::Java, "bin/codegraph-java"),
+        (PackId::Go, "bin/codegraph-go"),
+        (PackId::Csharp, "bin/codegraph-csharp"),
+        (PackId::CCpp, "bin/codegraph-c-cpp"),
+    ] {
+        let key = PackKey {
             id,
-            version: key.version.clone(),
-            target: target.into(),
-            engine_version: "0.1.0".into(),
-            protocol: "codegraph.analyzer/1".into(),
-            source_commit: "0".repeat(40),
-            source_dirty: false,
-            archive_size: 1,
-            archive_sha256: "0".repeat(64),
-            files: id
-                .required(target)
-                .into_iter()
-                .filter(|path| *path != syntax)
-                .chain(std::iter::once(syntax))
-                .map(|path| model::ManifestFile {
-                    path: path.into(),
-                    size: 1,
-                    sha256: "0".repeat(64),
-                    executable: path.starts_with("bin/"),
-                })
-                .collect(),
+            version: versions()[&id].clone(),
         };
-        assert!(
-            validate_manifest(&manifest, &key, target).is_ok(),
-            "{target}"
-        );
-        assert_eq!(manifest.files.pop().unwrap().path, syntax);
-        assert_eq!(
-            validate_manifest(&manifest, &key, target),
-            Err("语言支持包缺少必需入口".into()),
-            "{target}"
-        );
+        for target in ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"] {
+            let suffix = if target == "x86_64-pc-windows-msvc" {
+                ".exe"
+            } else {
+                ""
+            };
+            let manifest = Manifest {
+                schema_version: 1,
+                id,
+                version: key.version.clone(),
+                target: target.into(),
+                engine_version: "0.1.0".into(),
+                protocol: "codegraph.analyzer/1".into(),
+                source_commit: "0".repeat(40),
+                source_dirty: false,
+                archive_size: 1,
+                archive_sha256: "0".repeat(64),
+                files: [format!("{entry}{suffix}"), "control/codegraph.json".into()]
+                    .into_iter()
+                    .map(|path| model::ManifestFile {
+                        executable: path.starts_with("bin/"),
+                        path,
+                        size: 1,
+                        sha256: "0".repeat(64),
+                    })
+                    .collect(),
+            };
+            assert!(
+                validate_manifest(&manifest, &key, target).is_ok(),
+                "{id:?} {target}"
+            );
+            for wrong in [
+                format!("bin/codegraph{suffix}"),
+                format!(
+                    "bin/codegraph-{}{suffix}",
+                    if id == PackId::Rust { "python" } else { "rust" }
+                ),
+                format!("{entry}{}", if suffix.is_empty() { ".exe" } else { "" }),
+            ] {
+                let mut invalid = manifest.clone();
+                invalid.files[0].path = wrong;
+                assert!(
+                    validate_manifest(&invalid, &key, target).is_err(),
+                    "{id:?} {target}"
+                );
+            }
+            let mut invalid = manifest.clone();
+            invalid.files[0].executable = false;
+            assert!(validate_manifest(&invalid, &key, target).is_err());
+            invalid = manifest.clone();
+            invalid.files.pop();
+            assert!(validate_manifest(&invalid, &key, target).is_err());
+        }
     }
 }
 

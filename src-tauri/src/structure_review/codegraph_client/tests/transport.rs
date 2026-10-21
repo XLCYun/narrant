@@ -16,9 +16,9 @@ fn fixture(
     fs::write(pack.path().join("control/codegraph.json"), r#"{"schema_version":1,"pack_id":"typescript-javascript","pack_version":"0.1.0","engine_version":"0.1.0","protocol":"codegraph.analyzer/1"}"#).unwrap();
     fs::write(
         pack.path().join(if cfg!(windows) {
-            "bin/codegraph.exe"
+            "bin/codegraph-typescript-javascript.exe"
         } else {
-            "bin/codegraph"
+            "bin/codegraph-typescript-javascript"
         }),
         "fixture",
     )

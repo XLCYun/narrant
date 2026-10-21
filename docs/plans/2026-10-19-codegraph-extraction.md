@@ -1,5 +1,9 @@
 # CodeGraph 独立项目迁移计划
 
+2026-10-21：本计划的总 CLI 交付部分已由用户修订后的
+[独立语言分析器计划](2026-10-21-independent-language-analyzers.md) 取代。
+已完成提交与验证仍保留为历史基线，不重复实施；新验收不能沿用旧架构的 CI 结论。
+
 Spec: [0027](../specs/0027-independent-codegraph-project.md)。关联 Narrant #205。
 
 ## Global Constraints

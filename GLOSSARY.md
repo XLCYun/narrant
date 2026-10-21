@@ -121,8 +121,19 @@ _Avoid_: Repository map, new Review
 **Language Support Pack（语言支持包）**:
 An optional Narrant component that provides reusable capabilities for understanding
 one or more programming languages. **Structure Changes** is its first consumer; other
-language-aware features may also use those capabilities.
+language-aware features may also use those capabilities. For Code Graph generation,
+Narrant installs an exact-version **Analyzer Package** from CodeGraph.
 _Avoid_: Structure-only support pack, translation pack, project dependencies
+
+**Language Analyzer（语言分析器）**:
+A CodeGraph product that independently analyzes one or more programming languages
+and returns a **Code Graph** through the shared analysis protocol.
+_Avoid_: Native Helper, Narrant Helper, umbrella CLI
+
+**Analyzer Package（分析器包）**:
+A versioned distribution of a **Language Analyzer**, including its directly callable
+entry and required dependencies. Narrant manages installation and use of these packages.
+_Avoid_: Helper package, project dependencies
 
 **Review Snapshot**:
 An immutable **Change Comparison** that became current for a **Review**, pinned to exact

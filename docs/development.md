@@ -5,13 +5,13 @@
 ## 结构分析开发
 
 应用依赖使用 `pnpm install --frozen-lockfile` 安装；Node 版本以 package.json 为准。
-七种语言的图生成由独立 CodeGraph CLI 提供，Narrant 保留公共消费适配、图差异、
+七种语言的图生成由各自独立的 CodeGraph 语言分析器提供，Narrant 保留公共消费适配、图差异、
 安装租约与 Review 生命周期。开发和 PR 验收入口见 [CodeGraph 支持包说明](language-support-packs.md)，
 逐项测试归属见 [消费验收映射](codegraph-consumer-acceptance.md)。
 
 当前固定 CodeGraph 0.1.0 尚未发布，生产目录保持 unpublished。本机受控候选只证明
 对应语言/平台的消费链路，不能替代首个真实 release、七语言或 Windows 验收。
-原生迁移的历史结果仍保留在 docs/research；这些结果不自动成为新 CLI 消费证据。
+原生迁移的历史结果仍保留在 docs/research；这些结果不自动成为新语言入口的消费证据。
 
 同一比较侧各语言继续共用 Review 的 Git workspace。按需文件分组、测试文件筛选、
 Rust 三档依赖政策、图合并和前端 DTO 保持不变。客户端只发送公共分析选项，运行时与
@@ -41,7 +41,7 @@ src-tauri\target\release\bundle\nsis\Narrant_<version>_x64-setup.exe
 
 - `quality-gate.yml` 运行 macOS ARM64 / Windows x64 的 Rust 静态检查、单元、集成和
   文档测试，以及双平台真实 Tauri E2E；前端 Lint、类型检查、构建、组件与脚本测试也在此完成。
-- `validate-language-support-packs.yml` 下载固定 CodeGraph 七包，在双平台执行真实 CLI、
+- `validate-language-support-packs.yml` 下载固定 CodeGraph 七包，在双平台执行真实语言入口、
   图差异、安装与 Review 验收；helper 源码与发布由 CodeGraph 自身 CI 负责。
 - `Complete CI` 只在上述两套验收都成功时通过；失败、取消、跳过或缺失结果都不能放行。
   `main` 的必过检查使用此名称，合入前还要求分支包含最新 `main`。

@@ -1,4 +1,4 @@
-//! 固定 CodeGraph CLI 消费边界；图差异与工作区生命周期仍由 Narrant 管理。
+//! 独立 CodeGraph 语言分析器消费边界；图差异与工作区生命周期仍由 Narrant 管理。
 
 mod graph;
 mod process;
@@ -30,6 +30,11 @@ pub const PACK_IDS: &[&str] = &[
     "csharp",
     "c-cpp",
 ];
+
+/// 已知包 ID 的公开入口命名规则，安装校验与实际启动共用同一相对路径。
+pub(crate) fn public_entry(id: &str, windows: bool) -> String {
+    format!("bin/codegraph-{id}{}", if windows { ".exe" } else { "" })
+}
 
 /// 取消信号只表达意图；返回调用方前仍同步等待整棵进程树与管道线程。
 pub type CancellationCheck = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -70,7 +75,7 @@ struct Descriptor {
     protocol: String,
 }
 
-/// 持有已验证包的固定 CLI 路径；应用另以 PackLease 保护整个调用期间的安装目录。
+/// 持有已验证包的独立分析器路径；应用另以 PackLease 保护整个调用期间的安装目录。
 #[derive(Clone)]
 pub struct CodeGraphAnalyzer {
     id: String,
@@ -86,21 +91,14 @@ pub struct CodeGraphAnalyzer {
 }
 
 impl CodeGraphAnalyzer {
-    /// 从调用方已经完成完整性校验的绝对包根绑定公共描述符及 CLI。
+    /// 从调用方已经完成完整性校验的绝对包根绑定公共描述符及对应语言入口。
     pub fn from_pack(id: &str, root: &Path) -> Result<Self> {
         if !PACK_IDS.contains(&id) || !root.is_absolute() || !root.is_dir() {
             return Err(failure("包 ID 或绝对安装根无效"));
         }
         let root = root.canonicalize().map_err(failure)?;
         validate_descriptor(id, &root)?;
-        let executable = inside(
-            &root,
-            if cfg!(windows) {
-                "bin/codegraph.exe"
-            } else {
-                "bin/codegraph"
-            },
-        )?;
+        let executable = inside(&root, &public_entry(id, cfg!(windows)))?;
         Ok(Self {
             id: id.into(),
             root,

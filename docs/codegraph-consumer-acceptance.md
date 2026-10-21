@@ -1,12 +1,14 @@
 # CodeGraph 消费验收映射
 
 以 [规范 0027](specs/0027-independent-codegraph-project.md) 为迁移边界。下表是保留的 38 项
-完整 diff 测试；原函数名和差异断言保留，只替换为公共 CLI 的候选装配。机器可读清单为
+完整 diff 测试；原函数名和差异断言保留，由对应语言的固定入口消费候选。机器可读清单为
 [codegraph-consumer-acceptance.json](../resources/codegraph-consumer-acceptance.json)。
 
 入口 `node scripts/codegraph/verify-consumer.mjs <artifacts> --candidates <json> --language <id>`
 在 macOS ARM64 或 Windows x64 串行运行选定语言模块；完整 PR CI 使用 `--language all`。
 所有 Rust 调用经过 `scripts/cargo-agent.sh`；明确选中但缺包或零测试均失败。
+历史函数名中的 `cli` / `helper` 不代表通用入口：当前所有真实调用都绑定
+`bin/codegraph-<id>[.exe] analyze`，不传 `--pack` 或 `--pack-root`。
 
 | 语言/模块 | 完整 diff 测试 |
 | --- | --- |
@@ -56,12 +58,16 @@
   消费者通过真实 `net999.0` 项目声明验证缺目标失败，仍保留 net8/net10 隔离与并集差异。
 - `language_support/tests/{service,python,native}.rs` 保留真实归档安装、错误重试、跨进程共享锁、
   删除保护、重启复用、只读分析，并增加旧同版本供应方隔离、公开来源身份与 SHA256SUMS 验证。
+  七包在两个目标平台的清单必须包含各自可执行入口和五字段描述符；旧通用入口、错误语言、
+  错误平台后缀和不可执行入口均不能通过校验。
+- `scripts/tests/codegraph-consumer.test.mjs` 验证下载流中断、发布摘要和解包摘要失败后可原目录
+  重试、已验证包复用、旧残片替换和损坏缓存重验；这些合成归档仅验证下载边界。
 - `structure_review/application/tests/` 保留 Rust、TS/JS、Python 的真实 Git Review DTO 链路，
   TS/JS 同样经完整生产安装服务；所有语言的工作区保护、并行失败与两侧取消回归继续执行。
 - `codegraph_client/tests/transport.rs` 验证公开 schema、身份、半行 EOF、重复键、图不变量、
   结果/诊断上限、错误与取消、嵌套后代退出。真实 TS 取消同时在两个平台运行。
-- `application/tests/codegraph_lifecycle.rs` 在 macOS 观察真实 CLI/worker/helper PID，验证
-  CLI 强制退出以及丢弃 IPC 后 shutdown，均先完成进程、工作区与包租约屏障。
+- `application/tests/codegraph_lifecycle.rs` 在 macOS 观察真实分析器/worker/helper PID，验证
+  分析器强制退出以及丢弃 IPC 后 shutdown，均先完成进程、工作区与包租约屏障。
   Windows 的进程身份与 Job 屏障由共享 `child_process` 的原生句柄回归以及真实 CLI 取消覆盖；
   Unix PID 观察用例不宣称在 Windows 执行。
 - Narrant 保留 `child_process` 对 Git 等原调用者的测试，以及 Review 生命周期与工作区回归。
