@@ -75,15 +75,41 @@ fn strict_public_protocol_rejects_invalid_messages_and_exits() {
         "crash",
         "utf8",
         "nested-duplicate",
-        "error-analysis-null",
-        "error-id",
-        "error-graph",
-        "error-version",
     ] {
         let (_pack, _repository, analyzer, input) = fixture(scenario);
         let error = analyzer.analyze(&input).expect_err(scenario);
         assert!(!error.is_cancelled(), "{scenario}: {error}");
     }
+}
+
+/// 错误封套的身份与 schema 先于后端失败消息校验，不能把拒收退化为普通分析错误。
+#[test]
+fn error_envelopes_reject_protocol_and_identity_before_backend_failure() {
+    for (scenario, rejection) in [
+        (
+            "error-analysis-null",
+            "CodeGraph 错误码、消息或请求 ID 无效",
+        ),
+        ("error-id", "completed 固定身份、请求 ID 或封套无效"),
+        ("error-graph", "unknown field `graph`"),
+        ("error-version", "completed 固定身份、请求 ID 或封套无效"),
+    ] {
+        let (_pack, _repository, analyzer, input) = fixture(scenario);
+        let error = analyzer.analyze(&input).expect_err(scenario);
+        assert!(!error.is_cancelled(), "{scenario}: {error}");
+        assert!(error.message.contains(rejection), "{scenario}: {error}");
+        assert!(
+            !error.message.contains("fixture failure"),
+            "{scenario}: {error}"
+        );
+    }
+    let (_pack, _repository, analyzer, input) = fixture("error");
+    let error = analyzer.analyze(&input).unwrap_err();
+    assert!(
+        error.message.contains("analysis_failed：fixture failure"),
+        "{error}"
+    );
+    assert!(!error.is_cancelled());
 }
 
 /// 有效结果保留扩展与原文，普通空图和失败不能混淆。
