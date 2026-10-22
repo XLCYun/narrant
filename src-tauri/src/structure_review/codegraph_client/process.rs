@@ -1,4 +1,4 @@
-//! 有界 stdio 与阶段状态机；不等待无限 EOF，也不把 completed 提前交付。
+//! 一次性有界 stdio；写完关闭输入，最终消息和完整退出共同决定结果。
 
 use super::{
     cancelled, failure,
@@ -7,7 +7,7 @@ use super::{
 };
 use crate::child_process::ProcessTree;
 use crate::structure_review::code_graph::CodeGraph;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{
     io::{Read, Write},
     path::Path,
@@ -36,7 +36,6 @@ enum Event {
 /// 当前进程与全部线程的唯一所有者，清理完毕前不会释放调用栈。
 pub(super) struct Session {
     process: ProcessTree,
-    outgoing: Option<SyncSender<Vec<u8>>>,
     incoming: Option<Receiver<Event>>,
     workers: Vec<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
@@ -44,7 +43,13 @@ pub(super) struct Session {
 
 impl Session {
     /// 直接启动对应语言分析器，工作目录和临时目录均为仓库外 scratch。
-    pub(super) fn start(analyzer: &CodeGraphAnalyzer, scratch: &Path) -> Result<Self> {
+    pub(super) fn start(
+        analyzer: &CodeGraphAnalyzer,
+        request: &Value,
+        scratch: &Path,
+    ) -> Result<Self> {
+        let mut bytes = serde_json::to_vec(request).map_err(failure)?;
+        bytes.push(b'\n');
         let mut command = Command::new(&analyzer.executable);
         #[cfg(test)]
         command.args(&analyzer.test_prefix_args);
@@ -61,10 +66,8 @@ impl Session {
         command.envs(&analyzer.test_environment);
         let process = ProcessTree::spawn(&mut command).map_err(failure)?;
         let (events, incoming) = mpsc::sync_channel(4);
-        let (outgoing, writes) = mpsc::sync_channel::<Vec<u8>>(2);
         let mut session = Self {
             process,
-            outgoing: Some(outgoing),
             incoming: Some(incoming),
             workers: Vec::new(),
             stop: Arc::new(AtomicBool::new(false)),
@@ -90,7 +93,11 @@ impl Session {
         session.workers.push(
             std::thread::Builder::new()
                 .name("codegraph-stdout".into())
-                .spawn(move || read_stdout(stdout, sender, stop, limit))
+                .spawn(move || {
+                    let mut pipe = stdout;
+                    read_stdout(&mut pipe, sender, stop.clone(), limit);
+                    drain_pipe(pipe, &stop);
+                })
                 .map_err(failure)?,
         );
         let stop = session.stop.clone();
@@ -99,38 +106,25 @@ impl Session {
         session.workers.push(
             std::thread::Builder::new()
                 .name("codegraph-stderr".into())
-                .spawn(move || read_stderr(stderr, sender, stop, limit))
+                .spawn(move || {
+                    let mut pipe = stderr;
+                    read_stderr(&mut pipe, sender, stop.clone(), limit);
+                    drain_pipe(pipe, &stop);
+                })
                 .map_err(failure)?,
         );
         let stop = session.stop.clone();
         session.workers.push(
             std::thread::Builder::new()
                 .name("codegraph-stdin".into())
-                .spawn(move || write_stdin(stdin, writes, events, stop))
+                .spawn(move || write_stdin(stdin, bytes, events, stop))
                 .map_err(failure)?,
         );
         Ok(session)
     }
 
-    /// 写线程执行阻塞风险操作，主线程仅向有限队列投递。
-    pub(super) fn send(&self, value: &Value) -> Result<()> {
-        let mut bytes = serde_json::to_vec(value).map_err(failure)?;
-        bytes.push(b'\n');
-        self.outgoing
-            .as_ref()
-            .ok_or_else(|| failure("CodeGraph stdin 已关闭"))?
-            .try_send(bytes)
-            .map_err(failure)
-    }
-
-    /// 完成或宿主退出时关闭 stdin，写线程排空已接受消息后释放管道。
-    pub(super) fn close_input(&mut self) {
-        self.outgoing.take();
-    }
-
     /// 回收过程不观察取消；退出或失败后关闭队列并等待每个线程。
     fn finish(&mut self) -> Result<()> {
-        self.close_input();
         let cleanup = self.process.finish(Duration::ZERO).map_err(failure);
         self.stop.store(true, Ordering::Release);
         self.incoming.take();
@@ -159,8 +153,8 @@ pub(super) fn run(
     request: &Value,
     scratch: &Path,
 ) -> Result<CodeGraph> {
-    let mut session = Session::start(analyzer, scratch)?;
-    let result = exchange(&mut session, analyzer, request);
+    let mut session = Session::start(analyzer, request, scratch)?;
+    let result = exchange(&mut session, analyzer);
     let cleanup = session.finish();
     match (result, cleanup) {
         (Err(mut error), Err(cleanup)) => {
@@ -177,22 +171,17 @@ pub(super) fn run(
     }
 }
 
-/// ready → running → terminal → EOF/exit 的唯一状态机，日志不会重设期限。
-fn exchange(
-    session: &mut Session,
-    analyzer: &CodeGraphAnalyzer,
-    request: &Value,
-) -> Result<CodeGraph> {
-    let mut deadline = Instant::now() + analyzer.limits.startup_timeout;
-    let mut running = false;
+/// 从启动起只有一个分析期限；结果或根退出只收紧期限，不能延长等待。
+fn exchange(session: &mut Session, analyzer: &CodeGraphAnalyzer) -> Result<CodeGraph> {
+    let mut deadline = Instant::now() + analyzer.limits.analysis_timeout;
     let mut analyze_written = false;
     let mut terminal: Option<Result<CodeGraph>> = None;
-    let mut cancellation_deadline = None;
+    let mut root_exited = false;
     let mut stdout_eof = false;
     let mut stderr_eof = false;
     let mut diagnostics = Vec::new();
     loop {
-        // 先处理已收到的真实消息；同一轮观察的用户取消不能覆盖后端错误。
+        // 已观察的真实消息先于同轮用户取消；后端失败不能被取消掩盖。
         let event = session
             .incoming
             .as_ref()
@@ -203,43 +192,16 @@ fn exchange(
                 if terminal.is_some() {
                     return preserve(terminal, failure("completed 后出现额外协议消息"));
                 }
-                let message = protocol::decode(&bytes)?;
-                match message {
-                    Message::Ready(ready) => {
-                        if running {
-                            return Err(failure("CodeGraph 重复发送 ready"));
-                        }
-                        if ready.protocol != protocol::PROTOCOL
-                            || ready.message_type != "ready"
-                            || ready.engine_version != super::ENGINE_VERSION
-                            || ready.pack_id != analyzer.id
-                        {
-                            return Err(failure("CodeGraph ready 与固定引擎、协议或包身份不匹配"));
-                        }
-                        session.send(request)?;
-                        running = true;
-                        deadline = Instant::now() + analyzer.limits.analysis_timeout;
-                    }
-                    message => {
-                        if !running {
-                            return Err(failure("CodeGraph 在 analyze 前发送 completed"));
-                        }
-                        let result = completed(
-                            message,
-                            cancellation_deadline.is_some() || (analyzer.cancelled)(),
-                        )?;
-                        session.close_input();
-                        deadline = Instant::now() + analyzer.limits.exit_timeout;
-                        terminal = Some(result.and_then(|completed| {
-                            super::graph::build(completed, analyzer.languages())
-                        }));
-                    }
-                }
+                let result = completed(protocol::decode(&bytes)?, &analyzer.id)?;
+                deadline = deadline.min(Instant::now() + analyzer.limits.exit_timeout);
+                terminal =
+                    Some(result.and_then(|completed| {
+                        super::graph::build(completed, analyzer.languages())
+                    }));
             }
             Ok(Event::StdoutEof) => {
                 stdout_eof = true;
-                // 已发 cancel 的不可协作 CodeGraph 可以主动结束自身域；不能把预期 EOF 伪造为后端错误。
-                if terminal.is_none() && cancellation_deadline.is_none() {
+                if terminal.is_none() {
                     let mut error = failure("CodeGraph 在完整 completed 前关闭 stdout");
                     if !diagnostics.is_empty() {
                         error.message.push_str(&format!(
@@ -271,50 +233,43 @@ fn exchange(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(POLL),
         }
-        if (analyzer.cancelled)() && cancellation_deadline.is_none() {
-            cancellation_deadline = Some(Instant::now() + analyzer.limits.cancellation_grace);
-            if running && terminal.is_none() {
-                // 发送失败仍然进入有界清理；不能因此跳过进程树回收。
-                let _ = session.send(&json!({"protocol": protocol::PROTOCOL, "type": "cancel", "id": protocol::REQUEST_ID}));
+        let status = session.process.status().map_err(failure)?;
+        if let Some(status) = status {
+            if !root_exited {
+                root_exited = true;
+                // 根退出也可能留下持有 stdout/stderr 的后代，不能继续等满分析期限。
+                deadline = deadline.min(Instant::now() + analyzer.limits.exit_timeout);
             }
-        }
-        if let Some(status) = session.process.status().map_err(failure)? {
-            if !status.success() && stdout_eof && stderr_eof {
-                return preserve(
-                    terminal,
-                    if cancellation_deadline.is_some() {
-                        cancelled()
-                    } else {
+            if stdout_eof && stderr_eof {
+                if !status.success() {
+                    return preserve(
+                        terminal,
                         failure(format!(
                             "CodeGraph 异常退出 {status}：{}",
                             String::from_utf8_lossy(&diagnostics)
-                        ))
-                    },
-                );
-            }
-            if stdout_eof
-                && stderr_eof
-                && (analyze_written || terminal.as_ref().is_some_and(|value| value.is_err()))
-            {
-                return match terminal {
-                    Some(Err(error)) => Err(error),
-                    Some(Ok(_)) if cancellation_deadline.is_some() => Err(cancelled()),
-                    Some(Ok(completed)) => Ok(completed),
-                    None if cancellation_deadline.is_some() => Err(cancelled()),
-                    None => Err(failure("CodeGraph 缺少终结响应")),
-                };
+                        )),
+                    );
+                }
+                if analyze_written || terminal.as_ref().is_some_and(|value| value.is_err()) {
+                    return terminal.unwrap_or_else(|| Err(failure("CodeGraph 缺少终结响应")));
+                }
             }
         }
-        if cancellation_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if (analyzer.cancelled)() {
+            if let Some(status) = status.filter(|status| !status.success()) {
+                return preserve(terminal, failure(format!("CodeGraph 异常退出 {status}")));
+            }
             return preserve(terminal, cancelled());
         }
-        if cancellation_deadline.is_none() && Instant::now() >= deadline {
-            let reason = if terminal.is_some() {
+        if Instant::now() >= deadline {
+            let reason = if terminal.is_some() || root_exited {
                 "CodeGraph 退出超时"
-            } else if running {
-                "CodeGraph 分析超时"
             } else {
-                "CodeGraph 启动超时"
+                "CodeGraph 分析超时"
+            };
+            let reason = match status.filter(|status| !status.success()) {
+                Some(status) => format!("CodeGraph 异常退出 {status}；{reason}"),
+                None => reason.into(),
             };
             return preserve(terminal, failure(reason));
         }
@@ -335,40 +290,38 @@ fn preserve<T>(
     Err(next)
 }
 
-/// 校验终结消息的请求 ID、互斥分支和后端错误字段。
-fn completed(message: Message, cancellation_recorded: bool) -> Result<Result<Completed>> {
-    let (version, kind, id, outcome) = match &message {
+/// 每个最终分支都核对固定身份；只有拒收封套的两类错误允许 null 请求 ID。
+fn completed(message: Message, pack: &str) -> Result<Result<Completed>> {
+    let (version, engine, identity, kind, id, outcome) = match &message {
         Message::Ok(value) => (
             &value.protocol,
+            &value.engine_version,
+            &value.pack_id,
             &value.message_type,
             Some(value.id.as_str()),
             &value.outcome,
         ),
         Message::Error(value) => (
             &value.protocol,
+            &value.engine_version,
+            &value.pack_id,
             &value.message_type,
             value.id.0.as_deref(),
             &value.outcome,
         ),
-        Message::Cancelled(value) => (
-            &value.protocol,
-            &value.message_type,
-            Some(value.id.as_str()),
-            &value.outcome,
-        ),
-        Message::Ready(_) => return Err(failure("终结阶段不能接收 ready")),
     };
     if version != protocol::PROTOCOL
+        || engine != super::ENGINE_VERSION
+        || identity != pack
         || kind != "completed"
         || id.is_some_and(|id| id != protocol::REQUEST_ID)
-        || outcome.is_empty()
+        || !["ok", "error"].contains(&outcome.as_str())
     {
-        return Err(failure("completed 请求 ID 或封套无效"));
+        return Err(failure("completed 固定身份、请求 ID 或封套无效"));
     }
+    let missing_id = id.is_none();
     Ok(match message {
         Message::Ok(value) => Ok(value),
-        Message::Cancelled(_) if cancellation_recorded => Err(cancelled()),
-        Message::Cancelled(_) => return Err(failure("未请求取消却收到 cancelled")),
         Message::Error(value) => {
             let error = value.error;
             if ![
@@ -385,12 +338,13 @@ fn completed(message: Message, cancellation_recorded: bool) -> Result<Result<Com
             ]
             .contains(&error.code.as_str())
                 || error.message.is_empty()
+                || (missing_id
+                    && !["invalid_request", "incompatible_protocol"].contains(&error.code.as_str()))
             {
-                return Err(failure("CodeGraph 错误码或消息无效"));
+                return Err(failure("CodeGraph 错误码、消息或请求 ID 无效"));
             }
             Err(failure(format!("{}：{}", error.code, error.message)))
         }
-        Message::Ready(_) => unreachable!(),
     })
 }
 
@@ -520,43 +474,60 @@ fn read_stderr(
     }
 }
 
-/// 独占 stdin，以可取消分片写入避免 CodeGraph 停止读取导致宿主卡住。
+/// 错误或取消后仍排空管道；终止树后遇到无数据即可退出，不再向已关闭队列投递。
+fn drain_pipe(mut pipe: impl Read, stop: &AtomicBool) {
+    let mut buffer = [0; 8192];
+    loop {
+        match pipe.read(&mut buffer) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if stop.load(Ordering::Acquire) {
+                    return;
+                }
+                std::thread::sleep(POLL);
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// 写线程只接受一个请求，刷新后释放 stdin；正常 EOF 是语言程序开始处理的边界。
 fn write_stdin(
     mut pipe: impl Write,
-    receiver: Receiver<Vec<u8>>,
+    bytes: Vec<u8>,
     sender: SyncSender<Event>,
     stop: Arc<AtomicBool>,
 ) {
-    while !stop.load(Ordering::Acquire) {
-        let bytes = match receiver.recv_timeout(POLL) {
-            Ok(bytes) => bytes,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-        };
-        let mut remaining = bytes.as_slice();
-        while !remaining.is_empty() && !stop.load(Ordering::Acquire) {
-            match pipe.write(remaining) {
-                Ok(0) => {
-                    emit(
-                        &sender,
-                        &stop,
-                        Event::Error("CodeGraph stdin 写入零字节".into()),
-                    );
-                    return;
-                }
-                Ok(count) => remaining = &remaining[count..],
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(POLL)
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    emit(&sender, &stop, Event::Error(error.to_string()));
-                    return;
-                }
+    let mut remaining = bytes.as_slice();
+    while !remaining.is_empty() && !stop.load(Ordering::Acquire) {
+        match pipe.write(remaining) {
+            Ok(0) => {
+                emit(
+                    &sender,
+                    &stop,
+                    Event::Error("CodeGraph stdin 写入零字节".into()),
+                );
+                return;
+            }
+            Ok(count) => remaining = &remaining[count..],
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(POLL)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                emit(&sender, &stop, Event::Error(error.to_string()));
+                return;
             }
         }
-        if !emit(&sender, &stop, Event::Written) {
+    }
+    if remaining.is_empty() {
+        if let Err(error) = pipe.flush() {
+            emit(&sender, &stop, Event::Error(error.to_string()));
             return;
         }
+        drop(pipe);
+        emit(&sender, &stop, Event::Written);
     }
 }

@@ -4,6 +4,10 @@ status: accepted
 
 # 直接调用独立语言分析器
 
+2026-10-22 补充：[ADR-0039](0039-implement-codegraph-protocol-in-native-analyzers.md)
+进一步限定公共协议必须由语言程序自身实现，替代本文允许跨语言共享宿主的内部实现边界。
+本文的调用方安装调度、独立分发及文件选集决定继续有效。
+
 CodeGraph 主要维护各语言的源码分析能力，每个语言分析器应成为能独立接收项目输入、
 直接返回 Code Graph 的产品。2026-10-21 用户确认：在同一个 CodeGraph 仓库维护统一
 stdio JSON 契约与 `analyzers/`，各分析器分别构建打包；允许直接入口携带运行时与依赖。

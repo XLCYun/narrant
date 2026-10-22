@@ -35,7 +35,7 @@ fn descendants(root: i32) -> Vec<i32> {
     owned.into_iter().collect()
 }
 
-/// 真实 CLI 取消和异常退出都先回收嵌套 worker/helper，再释放实际 Review 工作区和包租约。
+/// 真实一次性 CLI 取消和异常退出都先回收已观察的入口，再释放实际 Review 工作区和包租约。
 #[tokio::test]
 #[ignore = "需要真实 TypeScript CodeGraph 产物，Unix PID 观察只在 macOS 验收"]
 async fn real_cli_exit_and_cancellation_preserve_workspace_and_pack_barriers() {
@@ -112,14 +112,15 @@ async fn real_cli_exit_and_cancellation_preserve_workspace_and_pack_barriers() {
             if let Ok(value) = std::fs::read_to_string(&marker) {
                 if let Ok(cli) = value.parse::<i32>() {
                     let owned = descendants(cli);
-                    if owned.len() >= 3 {
+                    // SAFETY: 仅查询本夹具刚刚启动的入口，不假设入口必须另有 worker。
+                    if unsafe { libc::kill(cli, 0) } == 0 {
                         break (cli, owned);
                     }
                 }
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "未观察到真实 CLI、worker 与 helper"
+                "未观察到真实一次性 CLI"
             );
             assert!(!worker.is_finished(), "真实分析在生命周期观察前结束");
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -129,7 +130,7 @@ async fn real_cli_exit_and_cancellation_preserve_workspace_and_pack_barriers() {
         assert!(packs.remove(PackId::TypeScriptJavascript, "0.1.0").is_err());
         assert!(fixture.head.exists());
         if terminate_cli {
-            // SAFETY: PID 来自本夹具启动的真实公共 CLI，且其 worker/helper 已被观察。
+            // SAFETY: PID 来自本夹具启动并确认仍存活的真实公共 CLI。
             assert_eq!(unsafe { libc::kill(cli, libc::SIGKILL) }, 0);
             let error = worker.await.unwrap().unwrap_err();
             assert_eq!(error.code, "analysis-failed", "{error:?}");

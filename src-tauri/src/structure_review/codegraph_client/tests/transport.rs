@@ -32,9 +32,7 @@ fn fixture(
         .test_environment
         .insert("CODEGRAPH_TEST_SCENARIO".into(), scenario.into());
     analyzer.limits = AnalysisLimits {
-        startup_timeout: Duration::from_secs(2),
         analysis_timeout: Duration::from_secs(2),
-        cancellation_grace: Duration::from_millis(500),
         exit_timeout: Duration::from_secs(1),
         max_result_bytes: 2048,
         max_diagnostic_bytes: 2048,
@@ -72,6 +70,15 @@ fn strict_public_protocol_rejects_invalid_messages_and_exits() {
         "exit",
         "cancelled",
         "error",
+        "ready",
+        "empty",
+        "crash",
+        "utf8",
+        "nested-duplicate",
+        "error-analysis-null",
+        "error-id",
+        "error-graph",
+        "error-version",
     ] {
         let (_pack, _repository, analyzer, input) = fixture(scenario);
         let error = analyzer.analyze(&input).expect_err(scenario);
@@ -89,10 +96,10 @@ fn returns_validated_graph_without_losing_semantic_extensions() {
     assert_eq!(node.extensions["typescript.custom"]["preserved"], true);
 }
 
-/// 未 ready 的阻塞进程和运行中的协作取消都必须及时退出并报告取消。
+/// 未读取输入与已收到正常 EOF 的阻塞进程都由调用方立即取消，不等待协作消息。
 #[test]
-fn cancellation_and_startup_timeout_are_bounded() {
-    for scenario in ["silent", "cooperate"] {
+fn cancellation_and_analysis_timeout_are_bounded() {
+    for scenario in ["silent", "hang-after-input"] {
         let (_pack, _repository, analyzer, input) = fixture(scenario);
         let started = Instant::now();
         let error = analyzer
@@ -109,36 +116,118 @@ fn cancellation_and_startup_timeout_are_bounded() {
         .analyze(&input)
         .unwrap_err()
         .message
-        .contains("启动超时"));
+        .contains("分析超时"));
 }
 
-/// 后代即使建立新进程组，父 CLI 异常退出或取消也先完成后代屏障。
+/// 测试持有真实进程身份；Windows 在调用返回前固定 HANDLE，避免 PID 重用误判。
 #[cfg(unix)]
+type Observed = i32;
+#[cfg(windows)]
+type Observed = crate::child_process::test_support::ObservedProcess;
+
+/// 先保存仍存活的两层后代，再允许根退出；回调本身不提供进程清理。
+fn observe_descendants(marker: &Path, saved: &Path, observed: &std::sync::Mutex<Vec<Observed>>) {
+    let mut observed = observed.lock().unwrap();
+    if !observed.is_empty() {
+        return;
+    }
+    let Ok(values) = fs::read_to_string(marker) else {
+        return;
+    };
+    for pid in values.lines().map(|value| value.parse::<u32>().unwrap()) {
+        #[cfg(unix)]
+        {
+            // SAFETY: 标记来自正在等待本测试放行的真实夹具进程。
+            assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0);
+            observed.push(pid as i32);
+        }
+        #[cfg(windows)]
+        {
+            let process = Observed::open(pid).unwrap();
+            assert_eq!(
+                process.status(),
+                windows_sys::Win32::Foundation::WAIT_TIMEOUT
+            );
+            observed.push(process);
+        }
+    }
+    assert_eq!(observed.len(), 2);
+    fs::write(saved, "observed").unwrap();
+}
+
+/// 正常根退出、继承管道、异常退出、取消和期限均先等待后代及管道，再清除 scratch。
 #[test]
 fn nested_descendants_are_reaped_before_return_on_cancel_and_outer_death() {
-    for scenario in ["nested", "outer-death"] {
+    for (scenario, cancel, success) in [
+        ("nested", true, false),
+        ("nested", false, false),
+        ("outer-death", false, false),
+        ("normal-orphan", false, true),
+        ("normal-held-pipe", false, false),
+        ("exit-held-pipe", false, false),
+        ("abnormal-held-pipe", false, false),
+    ] {
         let (pack, _repository, mut analyzer, input) = fixture(scenario);
         let marker = pack.path().join("pids");
-        analyzer.test_environment.insert(
-            "CODEGRAPH_TEST_PIDS".into(),
-            marker.clone().into_os_string(),
-        );
-        let observed = marker.clone();
-        let started = Instant::now();
-        let cancel = scenario == "nested";
-        analyzer = analyzer.with_cancellation(Arc::new(move || {
-            cancel && observed.is_file() && started.elapsed() > Duration::from_millis(300)
-        }));
-        let error = analyzer.analyze(&input).unwrap_err();
-        assert_eq!(error.is_cancelled(), cancel, "{error}");
-        for pid in fs::read_to_string(marker)
-            .unwrap()
-            .lines()
-            .map(|value| value.parse::<i32>().unwrap())
-        {
-            // SAFETY: 仅检查本次夹具记录的后代 PID，返回前已由 ProcessTree 完成回收。
-            assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "后代仍存活：{pid}");
+        let saved = pack.path().join("saved");
+        let scratch = pack.path().join("scratch");
+        for (key, path) in [
+            ("CODEGRAPH_TEST_PIDS", &marker),
+            ("CODEGRAPH_TEST_SAVED", &saved),
+            ("CODEGRAPH_TEST_SCRATCH", &scratch),
+        ] {
+            analyzer
+                .test_environment
+                .insert(key.into(), path.clone().into_os_string());
         }
+        analyzer.limits.analysis_timeout = Duration::from_secs(2);
+        analyzer.limits.exit_timeout = Duration::from_millis(200);
+        let observed = Arc::new(std::sync::Mutex::new(Vec::<Observed>::new()));
+        let shared = observed.clone();
+        let started = Instant::now();
+        analyzer = analyzer.with_cancellation(Arc::new(move || {
+            observe_descendants(&marker, &saved, &shared);
+            cancel && saved.is_file() && started.elapsed() > Duration::from_millis(200)
+        }));
+        let result = analyzer.analyze(&input);
+        // 返回后的第一项进程观察不补等，不允许断言或清理守卫帮助后代退出。
+        #[cfg(unix)]
+        let completion: Vec<_> = observed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|pid| {
+                // SAFETY: 仅查询本次已观察的自有后代；不向裸 PID 发送终止信号。
+                unsafe { libc::kill(*pid, 0) }
+            })
+            .collect();
+        #[cfg(windows)]
+        let completion: Vec<_> = observed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|process| process.status())
+            .collect();
+        #[cfg(unix)]
+        assert_eq!(completion, vec![-1, -1], "{scenario}");
+        #[cfg(windows)]
+        assert_eq!(
+            completion,
+            vec![windows_sys::Win32::Foundation::WAIT_OBJECT_0; 2],
+            "{scenario}"
+        );
+        assert_eq!(result.is_ok(), success, "{scenario}: {result:?}");
+        if let Err(error) = result {
+            if scenario == "abnormal-held-pipe" {
+                assert!(error.message.contains("异常退出"), "{error}");
+            }
+            assert_eq!(error.is_cancelled(), cancel, "{scenario}: {error}");
+        }
+        assert!(started.elapsed() < Duration::from_secs(3), "{scenario}");
+        assert!(
+            !PathBuf::from(fs::read_to_string(scratch).unwrap()).exists(),
+            "scratch 必须在进程和管道退出后清除"
+        );
     }
 }
 
@@ -152,6 +241,12 @@ fn descriptor_and_input_boundaries_reject_identity_and_path_ambiguity() {
         .unwrap_err()
         .message
         .contains("重复"));
+    input.files = vec!["main.ts".into(); 100_001];
+    assert!(analyzer
+        .analyze(&input)
+        .unwrap_err()
+        .message
+        .contains("文件数量上限"));
     fs::write(pack.path().join("control/codegraph.json"), r#"{"schema_version":1,"pack_id":"typescript-javascript","pack_id":"typescript-javascript","pack_version":"0.1.0","engine_version":"0.1.0","protocol":"codegraph.analyzer/1"}"#).unwrap();
     assert!(CodeGraphAnalyzer::from_pack("typescript-javascript", pack.path()).is_err());
 }
@@ -175,7 +270,12 @@ fn unread_stdin_remains_cancellable() {
 /// 未接受请求的 null ID 和后续取消都不应抹掉真实公共错误。
 #[test]
 fn backend_error_survives_null_identity_and_later_cancellation() {
-    for scenario in ["error-null", "error-cancel"] {
+    for (scenario, code) in [
+        ("error-null", "invalid_request"),
+        ("error-request-id", "invalid_request"),
+        ("error-protocol-null", "incompatible_protocol"),
+        ("error-cancel", "analysis_failed"),
+    ] {
         let (_pack, _repository, analyzer, input) = fixture(scenario);
         let started = Instant::now();
         let error = analyzer
@@ -186,8 +286,17 @@ fn backend_error_survives_null_identity_and_later_cancellation() {
             .unwrap_err();
         assert!(!error.is_cancelled(), "{error}");
         assert!(
-            error.message.contains("analysis_failed：fixture failure"),
+            error.message.contains(&format!("{code}：fixture failure")),
             "{error}"
         );
     }
+}
+
+/// 诊断先于无结果 stdout EOF 时，也保留真正的启动失败原因。
+#[test]
+fn empty_stdout_preserves_diagnostics_received_before_eof() {
+    let (_pack, _repository, analyzer, input) = fixture("empty-diagnostic");
+    let error = analyzer.analyze(&input).unwrap_err();
+    assert!(error.message.contains("fixture diagnostic"), "{error}");
+    assert!(!error.is_cancelled());
 }

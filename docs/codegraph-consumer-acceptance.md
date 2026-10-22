@@ -64,12 +64,19 @@
   重试、已验证包复用、旧残片替换和损坏缓存重验；这些合成归档仅验证下载边界。
 - `structure_review/application/tests/` 保留 Rust、TS/JS、Python 的真实 Git Review DTO 链路，
   TS/JS 同样经完整生产安装服务；所有语言的工作区保护、并行失败与两侧取消回归继续执行。
-- `codegraph_client/tests/transport.rs` 验证公开 schema、身份、半行 EOF、重复键、图不变量、
-  结果/诊断上限、错误与取消、嵌套后代退出。真实 TS 取消同时在两个平台运行。
-- `application/tests/codegraph_lifecycle.rs` 在 macOS 观察真实分析器/worker/helper PID，验证
-  分析器强制退出以及丢弃 IPC 后 shutdown，均先完成进程、工作区与包租约屏障。
-  Windows 的进程身份与 Job 屏障由共享 `child_process` 的原生句柄回归以及真实 CLI 取消覆盖；
-  Unix PID 观察用例不宣称在 Windows 执行。
+- `codegraph_client/tests/transport.rs` 通过读到 stdin EOF 才输出的夹具验证一次性请求、最终
+  身份、半行 EOF、空输出、重复键、UTF-8、图不变量和结果/诊断上限；旧 ready/cancelled
+  均被拒绝。测试保留拒收封套的 null/确切 ID 和真实失败先于稍后取消的规则。
+  两层真实后代矩阵覆盖取消、期限、正常/异常根退出，以及根退出但后代继承管道的情况，
+  返回时直接确认后代已退出和 scratch 已清除；Windows 保留准确 HANDLE 后做零超时检查。
+- `application/tests/codegraph_lifecycle.rs` 在 macOS 观察真实一次性 TypeScript 入口，不再要求
+  不存在的 worker/helper 数量；强制退出以及丢弃 IPC 后 shutdown 均先完成进程、工作区
+  与包租约屏障。`codegraph_client/tests/rust_lifecycle.rs` 另观察并暂停真实 Cargo 后代再取消，
+  证明调用方回收的是实际 Rust 工具树。Windows 的 Job 原生句柄回归及真实 CLI 取消继续
+  执行；Unix PID 观察用例不宣称在 Windows 执行。
+- `code_graph/tests/graph.rs` 保留并执行 `merges_language_graphs_and_rejects_identity_or_symbol_collisions`
+  和 `mixed_languages_and_all_reference_target_states_are_supported`，这两项消费端合图断言
+  不以生产者内部 API 或 38 项差异清单替代。
 - Narrant 保留 `child_process` 对 Git 等原调用者的测试，以及 Review 生命周期与工作区回归。
   Unix 递归后代快照、出生时间识别和 zombie EPERM 修复与 CodeGraph 审查版本一致。
 

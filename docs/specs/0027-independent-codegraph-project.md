@@ -4,92 +4,51 @@ status: accepted
 
 # 独立 CodeGraph 项目与 Narrant 接入
 
-关联 [Issue #205](https://github.com/XLCYun/narrant/issues/205)。本规范记录
-2026-10-19 确认的总目标，以及 2026-10-21 确认的独立分析器、调用方调度和可选选集修订。
-CodeGraph 的对应规范为 `docs/specs/0001-standalone-language-analyzers.md`。
+关联 [Issue #205](https://github.com/XLCYun/narrant/issues/205)。总目标于 2026-10-19 确认；独立分析器和调用方调度于 2026-10-21 确认；各语言直接实现公共协议、一次输入输出及逐语言打包方案于 2026-10-22 完整确认。CodeGraph 对应规范为 `docs/specs/0001-standalone-language-analyzers.md`。
 
-## 目标
+## 目标与职责
 
-[XLCYun/CodeGraph](https://github.com/XLCYun/CodeGraph) 是公开、独立的多语言源码分析项目，
-各语言分析器通过统一 stdio JSON 接口生成 Code Graph。其他本地工具可以直接使用它，无需安装或构建
-Narrant。Narrant 是首个消费者。本次交付包括独立项目可用、首个可下载版本和 Narrant 实际接入。
-
-`CodeGraph` 是项目名称；**Code Graph** 是固定源码状态下、选定文件范围内的代码对象及关系。
-Narrant 将它用于 Change Comparison 的两侧，通用定义见 [GLOSSARY](../../GLOSSARY.md)。
-
-## 职责
+[XLCYun/CodeGraph](https://github.com/XLCYun/CodeGraph) 是独立、公开的多语言源码分析项目，其他工具可通过统一 stdio JSON 获取 Code Graph。Narrant 是首个消费者；本次包括独立项目可用、首个可下载版本和实际接入。
 
 | CodeGraph | Narrant |
 | --- | --- |
-| 七套独立语言分析器、源码对象及关系投影 | Git 比较与两侧源码准备 |
-| 分析 Host、输入与来源验证、完整构图 | Code Graph Difference 的计算 |
-| 分析器运行环境、目标 SDK 发现、超时与取消回收 | Review Workspace、Review、Snapshot 生命周期 |
-| 各分析器公开入口、共同 JSON 契约、图生成验收 | 按语言调用、返回图校验、多语言合图和界面 |
-| 独立构建、版本、分析器包及发布 | 固定兼容版本的下载、完整性校验、安装和使用租约 |
+| 七套语言分析器直接实现公共协议、SDK 发现、源码分析与构图 | Git 比较、两侧固定源码准备、Code Graph Difference |
+| 必要输入、来源与图不变量检查，避免重复防御与自动修图 | 安全解码、按语言调度、多语言合图和界面 |
+| 固定入口、随包运行时、共同契约和语言验收 | Review、Snapshot、Review Workspace 生命周期 |
+| 独立构建、不可变版本、发布清单与许可 | 固定版本下载、校验、安装、使用租约，以及调用进程树取消与超时回收 |
 
-只迁图生成，差异算法继续留在 Narrant。通用接口不要求 Git、Review、Pull Request 或
-Narrant 数据目录存在；输入是单个固定源码目录、可选的项目内相对文件选集及分析选项。
-分析期间保持源码状态一致是消费者的责任，CodeGraph 继续检查所需输入和各语言静态配置。
+只迁图生成。移除跨语言 Rust 协议宿主、私有转换及分析 worker；每个语言程序自身输出最终公共图。同语言适当共享代码不形成另一套消费者接口。Narrant 的共享进程管理仍服务 Git 等功能，不能随旧分析 Host 删除。
 
-## 公共接口
+## 接口与行为
 
-消费者按语言直接启动相应分析器，通过 stdin/stdout JSON 交换请求、结果及取消信息；
-stderr 专用于诊断。每个分析器自行定位包内依赖，完成目标 SDK 发现、输入验证、构图和回收。
-消费者不需要总 CLI、不依赖私有引擎协议，也不拼接 Node／Java／dotnet 命令。
-分析器可复用私有实现；内部 Rust 模块不是第二套公开接口。
+Narrant 从已验证包启动固定 `bin/codegraph-<id>[.exe] analyze`。它不拼 Node／Java／dotnet 命令，不接受总 CLI 或私有引擎参数。
 
-省略 `files` 时，分析器按语言项目配置发现源码；显式 `files: []` 返回空图。
-显式非空列表只为所选文件构图，选集外源码可用于语义解析并成为图外符号，不递归扩大结果。
-发现必须遵守项目配置和既有只读加载政策。多个独立项目根由消费者分别调用；
-Narrant 继续传入准备好的精确文件选集，并负责混合语言调度与合图。
+每进程只分析一次：写入一个 JSON 请求并关闭 stdin，读取一个最终 JSON 后等待退出。移除 ready/cancel；协议、引擎版本和语言身份从最终响应核对。正常 stdin EOF 不是取消。用户取消、超时或传输失败时，Narrant 终止整棵进程树，完成管道回收后才释放使用租约。启动失败、崩溃或强制终止可以没有 JSON，不能仅凭 EOF 或退出当作成功。
 
-每个进程处理一次分析；协议和引擎版本必须可核对。输入、输出、诊断和生命周期均有上限。
-完整的来源验证、图验证和子进程回收完成后才能报告成功。协议错误、读取失败、分析失败、
-超时与取消不能伪装成成功空图；省略选集与显式空集必须有不同且可验证的行为。
-协议文档和示例随 CodeGraph 源码发布，并作为 Narrant 消费端的兼容依据。
+输入包含单项目绝对根、可选相对文件选集和既定选项。省略 `files` 按语言配置发现；`[]` 返回空图且不发现 SDK；显式非空列表只为选集构图，其他源码用于上下文及图外符号。多个独立根分别调用；Narrant 继续提供精确选集并合并混合语言图。
 
-本次使用本机 stdio，不增加 HTTP 服务、持久化索引、增量编辑会话或图缓存。
-LSP 同样采用 JSON 消息，但其 [基础协议](https://github.com/microsoft/language-server-protocol/blob/gh-pages/_specifications/lsp/3.17/specification.md#base-protocol)
-不是 HTTP；使用 stdio 不等于采用 LSP 的语言服务接口。
+保留六类对象、身份、自身内容、包含、引用、扩展、测试开关及 Rust 三档依赖政策。正常 unresolved 不等于图损坏；真正的协议、输入、配置、SDK、读取或分析失败须明确报错，不伪造空图或自动修图。消费者仍检查返回图是否能安全使用。
 
-## 能力基线
+## 能力与分发
 
-保留 Rust、TypeScript/JavaScript、Python、Java、Go、C#、C/C++ 七套分析器，支持
-macOS ARM64 和 Windows x64。现有图身份、六种类别、自身内容、包含关系、引用与图外符号
-语义保持不变；测试代码开关和 Rust 三档依赖政策继续有效。
+保留 Rust、TS/JS、Python、Java、Go、C#、C/C++，支持 macOS ARM64、Windows x64。Rust、Python（Ruff/ty 的 Rust 实现）、Go 和 C/C++ 是原生入口；C# 使用 .NET apphost 与随包运行时；TS/JS、Java 使用只负责启动随包 Node/JVM 的薄入口。薄入口不解析分析 JSON、不发现 SDK、不转换图、不新增分析 worker。
 
-[0024](0024-native-analyzer-helper-protocol.md)、[0024a](0024a-native-language-analysis-profiles.md)
-与 [0025](0025-migrate-existing-analyzers-to-native-helpers.md) 是提取语义、来源、只读加载、
-取消回收和各语言政策的迁移基线。CodeGraph 源码采用 `analyzers/`，语言分析器作为主要产品；
-包内引擎协议属于私有实现，不能要求消费者依赖它。独立项目保留必要测试与第三方许可声明，
-不依赖 Narrant 源码路径。Narrant 的共享进程管理仍服务 Git 等功能，不能随分析器一并删除。
+沿用 [0024](0024-native-analyzer-helper-protocol.md)、[0024a](0024a-native-language-analysis-profiles.md)、[0025](0025-migrate-existing-analyzers-to-native-helpers.md) 中的语言语义、来源、只读及 SDK 政策；其旧私有消息与监督进程方式由本规范和 ADR-0039 替代。既有语言能力和验收不得因换接口而删除。
 
-## 版本与分发
+CodeGraph 独立发布固定版本分析器包，含入口、运行依赖、许可、文件清单和完整性信息，不要求单物理文件。项目目标 SDK 与分析器私有运行时分开，不暗中安装或升级目标工具链。调用方管理与调度各包，分析器不安装其他分析器。
 
-CodeGraph 在自己的仓库发布不可变的固定版本分析器包，包含可直接启动的入口、平台运行依赖、
-许可、文件清单和完整性信息；不要求每包只有一个物理文件。首个可下载版本属于本次范围。
-语言包仍可按需安装；没有必经的总 CLI，分析器不安装其他分析器。
-项目目标 SDK 与分析器私有运行时继续分开，不暗中安装或升级项目工具链。
+Narrant 精确固定经过验证的版本、来源与哈希，不读取 latest 或浮动分支。开发候选不得伪装已发布；最终生产配置必须指向真实可下载且经双平台消费验收的产物。
 
-Narrant 固定使用经过验证的精确版本，不根据 `latest`、浮动分支或远端未验证配置选择工具。
-下载与安装继续采用已验证的归档边界、哈希校验和使用租约。开发候选不得伪装成已发布版本；
-最终生产配置必须指向实际可下载且通过双平台验收的 CodeGraph 产物。
-
-[ADR-0038](../adr/0038-call-independent-language-analyzers.md) 替代 ADR-0037 的总 CLI 分层；
-CodeGraph 独立发布的决定继续替代 ADR-0036 的语言包分发归属。
-Narrant 应用仍由 `XLCYun/narrant` 发布，保留 `com.cyunlab.narrant`；本次不发布 Narrant 应用版本。
+[ADR-0039](../adr/0039-implement-codegraph-protocol-in-native-analyzers.md) 收紧 ADR-0038 的内部实现边界；此前独立分发决定继续有效。Narrant 应用仍从 XLCYun/narrant 发布，保留 `com.cyunlab.narrant`；本次不发 Narrant 应用版本。
 
 ## 验收
 
-- 独立 CodeGraph checkout 能构建、测试和运行图生成，无 Narrant 源码或安装依赖。
-- 七个分析器公开入口对有效输入生成符合既有图语义的结果；错误与取消明确、输出有界、进程树完整回收。
-- 每种语言分别验证目录发现、显式选集、显式空集和选集外引用；消费者不需要私有参数或运行时命令。
-- 七套语言的相关语义、来源、只读加载与生命周期验收在两个支持平台通过。
-- 首个固定版本产物实际可下载，清单、内容、版本及协议可验证。
-- Narrant 从 CodeGraph 安装固定兼容版本，按语言直接调用分析器生成两侧图，继续执行既有差异和 Review 流程。
-- 相关格式、类型、Lint、脚本及受影响测试通过；Narrant PR 最新提交的 `Complete CI` 通过，
-  包含双平台和真实 CodeGraph 消费路径，不能通过删除验收来完成迁移。
-- 两个仓库的必要源码均经 PR 审核合并，发布及必要收尾完成后才记为 #205 完成。
+- 独立 CodeGraph checkout 可构建、运行和打包七分析器，无 Narrant 源码依赖。
+- 每语言验证目录发现、显式选集、空集、图外引用、语义、只读、来源及 SDK 政策。
+- 七入口符合公共一次性 JSON、最终身份与明确失败语义，无旧宿主、私有转换或分析 worker；双平台实际验证新入口、运行时与整树取消回收。
+- 首个 CodeGraph 固定版本经人工合并及确切 main 完整 CI 后发布，真实字节、清单、哈希、内容和身份通过验证。
+- Narrant 完成固定版本安装、两侧图、既有全部差异映射、混合合图和 Review；保留租约及取消回收保障。
+- 相关格式、类型、Lint、脚本与受影响测试通过。Narrant PR 最新提交自动 `Complete CI` 成功，包含双平台及真实 CodeGraph 消费；不手动触发 quality-gate。
+- 两仓必要 PR 人工审核合并、发布与必要收尾后，才记 #205 完成。
 
-本次不增加新语言、新平台、图差异公共接口或新图展示产品。使用 #205 跟踪跨仓交付；
-必要的新 Issue 仍须展示具体内容并另行取得批准。
+不增加 HTTP、LSP、常驻索引或图缓存、新语言、新平台、跨语言 FFI、公共图差异、新图展示产品；不新增仓库、Issue 或用户聊天。

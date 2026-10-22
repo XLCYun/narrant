@@ -39,24 +39,20 @@ pub(crate) fn public_entry(id: &str, windows: bool) -> String {
 /// 取消信号只表达意图；返回调用方前仍同步等待整棵进程树与管道线程。
 pub type CancellationCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 
-/// 消费端固定的有界读取和阶段期限；消息不能延长绝对截止时间。
+/// 消费端固定的有界读取与绝对分析期限；终结后另收紧退出期限。
 #[derive(Clone, Debug)]
 pub struct AnalysisLimits {
-    pub startup_timeout: Duration,
     pub analysis_timeout: Duration,
-    pub cancellation_grace: Duration,
     pub exit_timeout: Duration,
     pub max_result_bytes: usize,
     pub max_diagnostic_bytes: usize,
 }
 
 impl Default for AnalysisLimits {
-    /// 与公共协议上限一致；取消为外层 CLI 留出 helper 的协作和回收期限。
+    /// 与公共协议上限一致；取消立即交由进程树所有者回收。
     fn default() -> Self {
         Self {
-            startup_timeout: Duration::from_secs(60),
             analysis_timeout: Duration::from_secs(30 * 60),
-            cancellation_grace: Duration::from_secs(7),
             exit_timeout: Duration::from_secs(5),
             max_result_bytes: 128 * 1024 * 1024,
             max_diagnostic_bytes: 256 * 1024,
@@ -172,6 +168,9 @@ impl LanguageAnalyzer for CodeGraphAnalyzer {
         let repository = input.repository_root.canonicalize().map_err(failure)?;
         if repository.starts_with(&self.root) || self.root.starts_with(&repository) {
             return Err(failure("源码仓库与支持包目录不能重叠"));
+        }
+        if input.files.len() > 100_000 {
+            return Err(failure("源码选集超过文件数量上限"));
         }
         let mut files = BTreeSet::new();
         for path in &input.files {

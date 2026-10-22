@@ -135,6 +135,16 @@ A versioned distribution of a **Language Analyzer**, including its directly call
 entry and required dependencies. Narrant manages installation and use of these packages.
 _Avoid_: Helper package, project dependencies
 
+**Analyzer Runtime（分析器运行时）**:
+The execution environment required by a **Language Analyzer** itself, distinct from
+the target version and platform of the analyzed project.
+_Avoid_: Project Target SDK
+
+**Project Target SDK（项目目标 SDK）**:
+The standard library, type declarations, platform headers and required toolchain
+resources corresponding to the analyzed project's target version and platform.
+_Avoid_: Analyzer Runtime, Analyzer Package
+
 **Review Snapshot**:
 An immutable **Change Comparison** that became current for a **Review**, pinned to exact
 base, comparison-base, and head revisions. Its identity and history remain saved even

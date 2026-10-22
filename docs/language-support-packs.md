@@ -10,8 +10,15 @@ Narrant 从 `XLCYun/CodeGraph` 消费固定 `v0.1.0`，包与引擎版本均为 
 应用从已持有使用租约的包根启动 `bin/codegraph-<id>[.exe] analyze`。七个固定 ID 为
 `rust`、`typescript-javascript`、`python`、`java`、`go`、`csharp` 和 `c-cpp`。
 每个入口自带语言身份，消费者不传语言选择器或包根参数。
-它只传源码根、相对文件选集、测试开关与 Rust 依赖范围，验证 ready 的引擎/协议/包身份，
-严格构造返回图，并等待分析器、嵌套 worker/helper 和管道线程退出后返回。
+它只传源码根、相对文件选集、测试开关与 Rust 依赖范围，写入一个 UTF-8 JSON 后关闭 stdin。
+正常输入 EOF 表示请求完整；没有 ready、cancel 或 cancelled 消息。stdout 只能包含一个带尾换行
+的最终 JSON，消费者验证 `protocol/engine_version/pack_id/type/id/outcome` 后严格构造返回图，
+并且必须观察到成功退出，才能交付成功图。启动、崩溃和强制终止可以没有最终 JSON。
+拒收封套的 `invalid_request/incompatible_protocol` 错误允许 null 或确切请求 ID；
+其他结果必须对应已接受的请求，错误分支不能附带成功图。
+取消、分析期限或传输失败会立即终止调用方拥有的整棵进程树；macOS 保留进程组及后代出生身份，
+Windows 在恢复入口执行前先分配 Job。根退出不等于后代退出；结果或根退出后收紧管道/退出期限，
+先回收所有实际后代和管道线程，再释放仓库外 scratch、工作区与支持包使用租约。
 Code Graph Difference、Git 两侧准备、Review/Snapshot、工作区保护与界面都留在 Narrant。
 
 公开契约以 CodeGraph 的 [protocol](https://github.com/XLCYun/CodeGraph/blob/main/docs/protocol.md)、

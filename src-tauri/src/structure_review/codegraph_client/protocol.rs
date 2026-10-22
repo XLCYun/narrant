@@ -1,4 +1,4 @@
-//! NDJSON 消息的严格 schema 与递归重复键检查。
+//! 单次最终 JSON 的严格 schema 与递归重复键检查。
 
 use super::{failure, Result};
 use serde::{
@@ -82,22 +82,13 @@ impl<'de> Deserialize<'de> for UniqueValue {
     }
 }
 
-/// ready 的版本、语言及包身份声明，不接受任何未定义字段。
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Ready {
-    pub protocol: String,
-    #[serde(rename = "type")]
-    pub message_type: String,
-    pub engine_version: String,
-    pub pack_id: String,
-}
-
 /// 已验证成功分支的候选数据，尚未经过公共来源及图检查。
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Completed {
     pub protocol: String,
+    pub engine_version: String,
+    pub pack_id: String,
     #[serde(rename = "type")]
     pub message_type: String,
     pub id: String,
@@ -110,22 +101,13 @@ pub(super) struct Completed {
 #[serde(deny_unknown_fields)]
 pub(super) struct Failed {
     pub protocol: String,
+    pub engine_version: String,
+    pub pack_id: String,
     #[serde(rename = "type")]
     pub message_type: String,
     pub id: Nullable,
     pub outcome: String,
     pub error: BackendError,
-}
-
-/// 后端明确取消分支，必须先记录调用方取消原因。
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Cancelled {
-    pub protocol: String,
-    #[serde(rename = "type")]
-    pub message_type: String,
-    pub id: String,
-    pub outcome: String,
 }
 
 /// CodeGraph 返回的错误只包含公共错误码与有界消息。
@@ -213,12 +195,10 @@ pub(super) enum Target {
     Unresolved { name: String },
 }
 
-/// 可接受消息由阶段逻辑进一步限制。
+/// 最终消息仅有成功与明确失败两个互斥分支。
 pub(super) enum Message {
-    Ready(Ready),
     Ok(Completed),
     Error(Failed),
-    Cancelled(Cancelled),
 }
 
 /// 严格 JSON 解码后按 type/outcome 选择互斥 schema，拒绝额外字段。
@@ -231,7 +211,6 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Message> {
         return Err(failure("completed 缺少请求 ID 字段"));
     }
     let message = match value.get("type").and_then(Value::as_str) {
-        Some("ready") => Message::Ready(serde_json::from_value(value).map_err(failure)?),
         Some("completed") => match value.get("outcome").and_then(Value::as_str) {
             Some("ok") => {
                 if let Some(nodes) = value.pointer("/graph/nodes").and_then(Value::as_array) {
@@ -246,9 +225,6 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Message> {
                 Message::Ok(serde_json::from_value(value).map_err(failure)?)
             }
             Some("error") => Message::Error(serde_json::from_value(value).map_err(failure)?),
-            Some("cancelled") => {
-                Message::Cancelled(serde_json::from_value(value).map_err(failure)?)
-            }
             _ => return Err(failure("未知 completed outcome")),
         },
         _ => return Err(failure("未知 CodeGraph 消息类型")),
