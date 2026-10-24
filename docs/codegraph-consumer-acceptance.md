@@ -56,7 +56,7 @@
 - `src-tauri/tests/codegraph_graphs.rs` 从旧 `native_helper_graphs.rs` 迁移：七语言真实图、内容差异、
   引用差异、包含关系、源文本、图外符号，以及多语言合并。C# 内部 platform 注入转归 CodeGraph；
   消费者通过真实 `net999.0` 项目声明验证缺目标失败，仍保留 net8/net10 隔离与并集差异。
-- `language_support/tests/{service,python,native}.rs` 保留真实归档安装、错误重试、跨进程共享锁、
+- `language_support/tests/{service,python,native,released}.rs` 保留真实归档安装、错误重试、跨进程共享锁、
   删除保护、重启复用、只读分析，并增加旧同版本供应方隔离、公开来源身份与 SHA256SUMS 验证。
   七包在两个目标平台的清单必须包含各自可执行入口和五字段描述符；旧通用入口、错误语言、
   错误平台后缀和不可执行入口均不能通过校验。
@@ -88,5 +88,9 @@
 [semantic-acceptance.json](https://github.com/XLCYun/CodeGraph/blob/main/resources/semantic-acceptance.json)
 逐项保留。旧研究文档继续作为有日期的迁移证据，不能替代当前发布、平台和消费验收结果。
 
-当前生产目录为 unpublished。本机候选、真实 release 下载、双平台完整 CI 三种证据分别记录；
-缺包不能通过 skip 假装验收完成，完整发布后的 CI 是最终合并条件。
+当前生产目录固定消费已公开的 [CodeGraph v0.1.0 预发布版](https://github.com/XLCYun/CodeGraph/releases/tag/v0.1.0)，
+源码为 `0552cc97f217d772b6d883ba75cc9007d3fc8309`。`released.rs` 从空的隔离目录
+通过生产下载源只安装 Python，再验证公开身份、固定源码和真实非空图；该用例随 Python
+及全语言命令在双平台执行。未发布保护使用单个测试实例内的夹具，继续覆盖实际生产守卫。
+本机候选、真实 release 下载、双平台完整 CI 三种证据分别记录；缺包不能通过 skip
+假装验收完成，最新提交的完整 CI 是最终合并条件。

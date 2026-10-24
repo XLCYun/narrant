@@ -1,8 +1,9 @@
 # CodeGraph 语言支持包消费
 
 Narrant 从 `XLCYun/CodeGraph` 消费固定 `v0.1.0`，包与引擎版本均为 `0.1.0`，
-协议为 `codegraph.analyzer/1`。当前七包保持 `published: false`；真实发布后由发布切换任务
-更新该标记并运行完整双平台消费验收，全部通过才可合入。应用发布继续使用 `XLCYun/narrant` 和 `com.cyunlab.narrant`。
+协议为 `codegraph.analyzer/1`。七包已作为 [v0.1.0 预发布版](https://github.com/XLCYun/CodeGraph/releases/tag/v0.1.0) 公开，
+固定源码为 `0552cc97f217d772b6d883ba75cc9007d3fc8309`，支持 macOS ARM64 与 Windows x64。
+目录标记为 `published: true`，合入仍需最新提交的双平台完整消费 CI 通过。应用发布继续使用 `XLCYun/narrant` 和 `com.cyunlab.narrant`。
 职责见 [规范 0027](specs/0027-independent-codegraph-project.md)。
 
 ## 公共边界
@@ -52,15 +53,19 @@ Code Graph Difference、Git 两侧准备、Review/Snapshot、工作区保护与�
 
 ## 验收入口
 
-正式产物发布后，从仓库根执行：
+从仓库根下载并验收固定公开发布包：
 
 ```sh
 pnpm codegraph:download .tools/codegraph-packs
 pnpm codegraph:verify .tools/codegraph-packs
 ```
 
-下载器只接受目录中的已发布固定版本。当前未发布状态会明确失败，不能用 skip、浮动 tag、
+下载器只接受目录中的已发布固定版本。未发布的目录夹具仍须明确失败，不能用 skip、浮动 tag、
 历史 Narrant release 或临时重建 helper 替代真实发布证据。Narrant 不再构建或发布语言 helper。
+
+`language_support/tests/released.rs` 另从空的隔离目录使用生产 `LanguageSupportPacks::new`，
+只请求 Python，验证固定 GitHub 源下载、包与源码身份及真实非空 CodeGraph。
+它不接受候选目录或源覆盖，随 Python 和全语言消费命令在两个平台执行。
 
 受控本机候选验收使用 CodeGraph 生成的真实 `manifest.json` / `pack.tar.gz`，按
 `<artifacts>/<id>/0.1.0/<target>` 放置，并提供只含公开六字段的候选数组：

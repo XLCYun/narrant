@@ -72,12 +72,13 @@ async fn assert_installed_target(
 #[tokio::test]
 async fn unpublished_native_pack_reports_explicit_error() {
     let root = tempfile::tempdir().unwrap();
-    let packs = LanguageSupportPacks::with_origin(
+    let mut packs = LanguageSupportPacks::with_origin(
         root.path().into(),
         ORIGIN.into(),
         "aarch64-apple-darwin".into(),
     )
     .unwrap();
+    Arc::get_mut(&mut packs.inner).unwrap().unpublished_pack = Some(PackId::Go);
     let error = packs
         .ensure(
             &[PackId::Go],
@@ -88,6 +89,8 @@ async fn unpublished_native_pack_reports_explicit_error() {
         .err()
         .unwrap();
     assert!(error.contains("尚未发布"));
+    assert!(!root.path().join("staging").exists());
+    assert!(!root.path().join("installed").exists());
     assert!(packs
         .snapshot()
         .packs
@@ -315,7 +318,7 @@ async fn real_codegraph_packs_install_and_analyze_through_public_cli() {
         }
         assert!(packs.remove(id, version).is_err());
         drop(lease);
-        // 已验证安装在未发布状态下仍可经生产源重新打开，且不需要再次下载。
+        // 已验证安装可经生产源重新打开，且不需要再次下载。
         let reopened =
             LanguageSupportPacks::with_origin(root.path().into(), ORIGIN.into(), target.into())
                 .unwrap();

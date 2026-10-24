@@ -63,7 +63,7 @@ jobs:
         with:
           node-version: 24.18.0
       - run: pnpm install --frozen-lockfile
-      # 尚未发布时明确失败；不跳过、伪造 URL 或从 CodeGraph 源码重建 helper。
+      # 只下载固定公开发布字节；缺包即失败，不从 CodeGraph 源码重建 helper。
       - name: Download exact published CodeGraph seven-pack release
         run: node scripts/codegraph/download-packs.mjs codegraph-packs
       - name: Select isolated Rust project test Cargo home

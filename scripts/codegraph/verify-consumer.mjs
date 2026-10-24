@@ -29,7 +29,7 @@ export function verificationCommands(language = 'all', platform = process.platfo
   const suites = {
     rust: ['codegraph_client::tests::rust_graph::','codegraph_client::tests::rust_syntax::','codegraph_client::tests::rust_production::',...(platform === 'win32' ? [] : ['codegraph_client::tests::rust_lifecycle::']),'real_installed_rust_pack_analyzes_with_existing_toolchain','real_rust_pack_flows_through_review_lifecycle_to_dto'],
     'typescript-javascript': ['codegraph_client::tests::typescript_graph::','real_installed_typescript_pack_analyzes_without_development_tools','real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto',...(platform === 'win32' ? [] : ['real_cli_exit_and_cancellation_preserve_workspace_and_pack_barriers'])],
-    python: ['codegraph_client::tests::python_graph::','codegraph_client::tests::python_native::','real_installed_python_pack_analyzes_without_user_python','native_python_mixed_review_uses_two_shared_workspaces','real_python_pack_flows_through_review_lifecycle_to_dto'],
+    python: ['real_released_python_pack_downloads_on_demand_and_analyzes','codegraph_client::tests::python_graph::','codegraph_client::tests::python_native::','real_installed_python_pack_analyzes_without_user_python','native_python_mixed_review_uses_two_shared_workspaces','real_python_pack_flows_through_review_lifecycle_to_dto'],
     java: [], go: [], csharp: [], 'c-cpp': [],
   };
   for (const id of selected) for (const filter of suites[id]) commands.push(command(filter));

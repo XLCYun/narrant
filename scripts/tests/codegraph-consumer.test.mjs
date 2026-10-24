@@ -258,7 +258,10 @@ test('consumer verification keeps all 38 diff tests and all language installatio
   const commands = verificationCommands('all','darwin');
   const joined=JSON.stringify(commands);
   assert.doesNotMatch(joined,/native-helpers|--build|native_languages|native_analyzer/);
-  for(const filter of ['rust_graph','rust_syntax','rust_production','rust_lifecycle','python_graph','python_native','typescript_graph','codegraph_graphs','real_codegraph_packs_install','real_rust_pack_flows','real_python_pack_flows','real_typescript_javascript_graphs_flow','real_cli_exit_and_cancellation']) assert.ok(joined.includes(filter),filter);
+  for(const filter of ['rust_graph','rust_syntax','rust_production','rust_lifecycle','python_graph','python_native','typescript_graph','codegraph_graphs','real_codegraph_packs_install','real_released_python_pack_downloads_on_demand_and_analyzes','real_rust_pack_flows','real_python_pack_flows','real_typescript_javascript_graphs_flow','real_cli_exit_and_cancellation']) assert.ok(joined.includes(filter),filter);
+  for (const platform of ['darwin', 'win32']) for (const language of ['all', 'python']) {
+    assert.ok(JSON.stringify(verificationCommands(language, platform)).includes('real_released_python_pack_downloads_on_demand_and_analyzes'));
+  }
   const inventory=JSON.parse(await fs.readFile(new URL('../../resources/codegraph-consumer-acceptance.json',import.meta.url)));
   assert.equal(inventory.diffTests.length,38);
   for(const item of inventory.diffTests) assert.match(await fs.readFile(new URL(`../../${item.new}`,import.meta.url),'utf8'),new RegExp(`fn ${item.test}\\(`));

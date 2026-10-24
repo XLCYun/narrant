@@ -9,8 +9,10 @@
 安装租约与 Review 生命周期。开发和 PR 验收入口见 [CodeGraph 支持包说明](language-support-packs.md)，
 逐项测试归属见 [消费验收映射](codegraph-consumer-acceptance.md)。
 
-当前固定 CodeGraph 0.1.0 尚未发布，生产目录保持 unpublished。本机受控候选只证明
-对应语言/平台的消费链路，不能替代首个真实 release、七语言或 Windows 验收。
+当前生产目录消费已公开的固定 CodeGraph `v0.1.0` 预发布版，源码为
+`0552cc97f217d772b6d883ba75cc9007d3fc8309`。生产源按需 Python 下载与真实图验收
+随完整消费命令执行。本机受控候选只证明对应语言/平台的消费链路，不能替代真实 release、
+七语言或 Windows 验收；合入前仍需最新提交的 `Complete CI` 通过。
 原生迁移的历史结果仍保留在 docs/research；这些结果不自动成为新语言入口的消费证据。
 
 同一比较侧各语言继续共用 Review 的 Git workspace。按需文件分组、测试文件筛选、

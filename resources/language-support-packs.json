@@ -7,31 +7,31 @@
   "packs": {
     "rust": {
       "version": "0.1.0",
-      "published": false
+      "published": true
     },
     "typescript-javascript": {
       "version": "0.1.0",
-      "published": false
+      "published": true
     },
     "python": {
       "version": "0.1.0",
-      "published": false
+      "published": true
     },
     "java": {
       "version": "0.1.0",
-      "published": false
+      "published": true
     },
     "go": {
       "version": "0.1.0",
-      "published": false
+      "published": true
     },
     "csharp": {
       "version": "0.1.0",
-      "published": false
+      "published": true
     },
     "c-cpp": {
       "version": "0.1.0",
-      "published": false
+      "published": true
     }
   }
 }

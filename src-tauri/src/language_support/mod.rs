@@ -45,6 +45,9 @@ struct Inner {
     storage: Storage,
     origin: String,
     client: reqwest::Client,
+    /// 测试只让当前实例模拟一个未发布包，不改变生产目录或其他实例。
+    #[cfg(test)]
+    unpublished_pack: Option<PackId>,
     state: Mutex<State>,
     changed: watch::Sender<u64>,
     stop: CancellationToken,
@@ -215,6 +218,8 @@ impl LanguageSupportPacks {
                     .timeout(Duration::from_secs(600))
                     .build()
                     .map_err(display)?,
+                #[cfg(test)]
+                unpublished_pack: None,
                 state: Mutex::new(State {
                     sequence: 1,
                     entries,
@@ -420,7 +425,10 @@ impl LanguageSupportPacks {
 
     /// 下载固定版本清单和归档，任何失败都在同盘 TempDir 中收尾。
     async fn install(&self, key: &PackKey) -> Result<u64, String> {
-        if self.inner.origin == ORIGIN && !model::published(key.id) {
+        let published = model::published(key.id);
+        #[cfg(test)]
+        let published = published && self.inner.unpublished_pack != Some(key.id);
+        if self.inner.origin == ORIGIN && !published {
             return Err(format!(
                 "{} CodeGraph 语言支持包尚未发布；需要经过验证的本地安装包。",
                 key.id.slug()
@@ -607,3 +615,7 @@ fn checksum(bytes: &[u8], name: &str) -> Result<String, String> {
 #[cfg(test)]
 #[path = "tests/support.rs"]
 pub(crate) mod test_support;
+
+#[cfg(test)]
+#[path = "tests/released.rs"]
+mod released_tests;
