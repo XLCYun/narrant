@@ -33,7 +33,7 @@ async fn real_released_python_pack_downloads_on_demand_and_analyzes() {
         manifest.source_commit, manifest.archive_sha256
     );
     let installed = lease.path(PackId::Python).unwrap().to_owned();
-    assert!(installed.starts_with(root.path()));
+    assert!(installed.starts_with(root.path().canonicalize().unwrap()));
     assert_eq!(
         fs::read_dir(root.path().join("installed"))
             .unwrap()
