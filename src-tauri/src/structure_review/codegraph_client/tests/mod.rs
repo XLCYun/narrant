@@ -7,5 +7,5 @@ mod rust_graph;
 mod rust_lifecycle;
 mod rust_production;
 mod rust_syntax;
-mod transport;
+pub(super) mod transport;
 mod typescript_graph;

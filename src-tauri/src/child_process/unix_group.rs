@@ -90,11 +90,10 @@ impl ProcessGroup {
             } else {
                 Err(io::Error::last_os_error())
             };
-            let alive = group_probe_alive(probe)?
-                || self
-                    .members
-                    .iter()
-                    .any(|(&pid, &stamp)| identity(pid) == Some(stamp));
+            let mut alive = group_probe_alive(probe)?;
+            for (&pid, &stamp) in &self.members {
+                alive |= recorded_member_alive(pid, stamp)?;
+            }
             if !alive {
                 return Ok(());
             }
@@ -102,6 +101,22 @@ impl ProcessGroup {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "子进程树回收超时"));
             }
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+/// 出生信息消失可能只是 zombie 过渡；仅查询 PID 是否仍存在，不对未知身份发送信号。
+fn recorded_member_alive(pid: i32, stamp: (u64, u64)) -> io::Result<bool> {
+    match identity(pid) {
+        Some(current) => Ok(current == stamp),
+        None => {
+            // SAFETY: 信号 0 只观察；PID 已复用时也不会终止不属于当前树的对象。
+            let probe = if unsafe { libc::kill(pid, 0) } == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            };
+            group_probe_alive(probe)
         }
     }
 }

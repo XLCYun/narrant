@@ -90,10 +90,17 @@ impl Session {
         let stop = session.stop.clone();
         let sender = events.clone();
         let limit = analyzer.limits.max_result_bytes;
+        #[cfg(test)]
+        let stdout_gate = analyzer.test_stdout_gate.clone();
         session.workers.push(
             std::thread::Builder::new()
                 .name("codegraph-stdout".into())
                 .spawn(move || {
+                    // 测试只控制读线程调度，字节仍来自真实子进程管道。
+                    #[cfg(test)]
+                    if let Some(gate) = stdout_gate {
+                        gate();
+                    }
                     let mut pipe = stdout;
                     read_stdout(&mut pipe, sender, stop.clone(), limit);
                     drain_pipe(pipe, &stop);
@@ -177,6 +184,7 @@ fn exchange(session: &mut Session, analyzer: &CodeGraphAnalyzer) -> Result<CodeG
     let mut analyze_written = false;
     let mut terminal: Option<Result<CodeGraph>> = None;
     let mut root_exited = false;
+    let mut cancelled_after_exit = false;
     let mut stdout_eof = false;
     let mut stderr_eof = false;
     let mut diagnostics = Vec::new();
@@ -250,16 +258,25 @@ fn exchange(session: &mut Session, analyzer: &CodeGraphAnalyzer) -> Result<CodeG
                         )),
                     );
                 }
+                if cancelled_after_exit {
+                    return preserve(terminal, cancelled());
+                }
                 if analyze_written || terminal.as_ref().is_some_and(|value| value.is_err()) {
                     return terminal.unwrap_or_else(|| Err(failure("CodeGraph 缺少终结响应")));
                 }
             }
         }
         if (analyzer.cancelled)() {
-            if let Some(status) = status.filter(|status| !status.success()) {
-                return preserve(terminal, failure(format!("CodeGraph 异常退出 {status}")));
+            if !root_exited {
+                return preserve(terminal, cancelled());
             }
-            return preserve(terminal, cancelled());
+            if !cancelled_after_exit {
+                // 根已退出时，失败帧可能仍在管道中；先终止遗留后代，再在既有期限内排空。
+                if let Err(error) = session.process.reap() {
+                    return preserve(terminal, failure(error));
+                }
+                cancelled_after_exit = true;
+            }
         }
         if Instant::now() >= deadline {
             let reason = if terminal.is_some() || root_exited {
@@ -531,3 +548,7 @@ fn write_stdin(
         emit(&sender, &stop, Event::Written);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/process.rs"]
+mod tests;

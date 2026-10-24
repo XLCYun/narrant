@@ -83,6 +83,8 @@ pub struct CodeGraphAnalyzer {
     #[cfg(test)]
     test_prefix_args: Vec<std::ffi::OsString>,
     #[cfg(test)]
+    test_stdout_gate: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(test)]
     test_environment: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
 }
 
@@ -104,6 +106,8 @@ impl CodeGraphAnalyzer {
             cancelled: Arc::new(|| false),
             #[cfg(test)]
             test_prefix_args: Vec::new(),
+            #[cfg(test)]
+            test_stdout_gate: None,
             #[cfg(test)]
             test_environment: Default::default(),
         })

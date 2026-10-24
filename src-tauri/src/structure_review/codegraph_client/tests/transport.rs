@@ -2,7 +2,7 @@ use super::super::*;
 use std::{fs, time::Instant};
 
 /// 伪 CLI 使用测试 Node 启动，所有消息仍经真实 stdio 与进程所有权边界。
-fn fixture(
+pub(in crate::structure_review::codegraph_client) fn fixture(
     scenario: &str,
 ) -> (
     tempfile::TempDir,
@@ -235,7 +235,7 @@ fn nested_descendants_are_reaped_before_return_on_cancel_and_outer_death() {
             .map(|process| process.status())
             .collect();
         #[cfg(unix)]
-        assert_eq!(completion, vec![-1, -1], "{scenario}");
+        assert_eq!(completion, vec![-1, -1], "{scenario}: {result:?}");
         #[cfg(windows)]
         assert_eq!(
             completion,
@@ -325,4 +325,28 @@ fn empty_stdout_preserves_diagnostics_received_before_eof() {
     let error = analyzer.analyze(&input).unwrap_err();
     assert!(error.message.contains("fixture diagnostic"), "{error}");
     assert!(!error.is_cancelled());
+}
+
+/// 真实 Transport 的清理错误也必须先等待根 HANDLE，不能由随后 Drop 帮助断言通过。
+#[cfg(windows)]
+#[test]
+fn cleanup_failure_retains_error_and_waits_root_before_return() {
+    use crate::child_process::windows_validation::{
+        with_validation, CleanupFault, ValidationOptions,
+    };
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    let (_pack, _repository, analyzer, input) = fixture("silent");
+    with_validation(
+        ValidationOptions {
+            fault: CleanupFault::BeforeTerminationOnce,
+        },
+        |observations| {
+            let result = analyzer.analyze(&input);
+            let immediate = observations.root_statuses();
+            assert_eq!(immediate, vec![WAIT_OBJECT_0]);
+            let error = result.unwrap_err();
+            assert!(!error.is_cancelled());
+            assert!(error.message.contains("清理失败"), "{error}");
+        },
+    );
 }
