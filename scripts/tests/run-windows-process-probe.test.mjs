@@ -23,7 +23,7 @@ const path = require('node:path');
 assert.equal(process.env.NARRANT_TEST_NODE, process.execPath);
 assert.ok(path.isAbsolute(process.env.NARRANT_TEST_NODE));
 assert.ok(fs.statSync(process.env.NARRANT_TEST_NODE).isFile());
-assert.deepEqual(process.argv.slice(2), ['test', '--manifest-path', 'native-helpers/windows-process-probe/Cargo.toml', '--locked', '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1']);
+assert.deepEqual(process.argv.slice(2), ['test', '--manifest-path', 'src-tauri/Cargo.toml', '--locked', '--lib', 'child_process::', '--', '--nocapture', '--test-threads=1']);
 process.exit(7);
 `);
     assert.equal(await runWindowsProcessProbe({ cwd: directory, platform: 'win32' }), 7);

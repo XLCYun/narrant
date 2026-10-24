@@ -7,7 +7,8 @@
 scripts/
 ├── cargo-agent.sh   # 保留统一 Cargo 锁与缓存入口
 ├── dev/            # 本地启动、Rust 缓存、图标生成与人工 E2E
-├── language-packs/ # 语言支持包、Native Helper、工具链与验收
+├── codegraph/      # 固定公开产物下载与 Narrant 消费验收
+├── language-packs/ # 目标项目 SDK 夹具与共享进程回归
 ├── release/        # 应用版本、签名构建、Draft 与 Stable 发布
 ├── update-smoke/   # 正式包升级验收、平台适配、TLS 与证据
 └── tests/          # Node 脚本及 workflow 回归测试
@@ -23,9 +24,8 @@ scripts/
 | Rust 检查 | `scripts/cargo-agent.sh check --manifest-path src-tauri/Cargo.toml --lib` |
 | 缓存状态 / 清理缓存 | `pnpm rust:cache:status` / `pnpm rust:cache:clean` |
 | 生成文件图标 | `pnpm generate:file-icons`（dev、preview、build 自动调用） |
-| 构建语言支持包 | `pnpm build:language-packs --id <id> --target <target> --output <目录>` |
-| 验收语言支持包 | `node scripts/language-packs/verify-native-analyzers.mjs <目录> --language <id>` |
-| Python 专项验收 | `node scripts/language-packs/verify-python-analyzer.mjs <目录>` |
+| 下载固定 CodeGraph 七包 | `pnpm codegraph:download .tools/codegraph-packs` |
+| 验收 CLI、diff、安装与 Review | `pnpm codegraph:verify .tools/codegraph-packs` |
 | Windows 安装包 / 本地 macOS 签名包 | `pnpm build:windows` / `pnpm build:macos:signed` |
 | 准备应用版本、提交和 tag | `pnpm release:prepare <不带 v 的版本>`（不会推送） |
 | 脚本与 workflow 回归 | `pnpm test:scripts` |
@@ -33,14 +33,14 @@ scripts/
 
 发布和升级验收由现有 workflow 编排，具体参数、审批和恢复步骤见
 [发布运维](../docs/application-update-operations.md)与[语言支持包说明](../docs/language-support-packs.md)。
-`publish:language-packs`、Draft 和 promotion 脚本会写远端状态，不属于本地回归测试入口。
+Draft 和 promotion 脚本会写远端状态，不属于本地回归测试入口。
 正式安装升级只在 GitHub-hosted 临时机器执行；日常 E2E 使用隔离身份和测试数据。
 
 ## 维护与验证
 
 `tests/` 继续由 `node --test scripts/tests/*.test.mjs` 完整发现。语言包 workflow 还明确选跑部分文件；
 增加或移动测试时同时核对默认命令和 CI 清单。发布准备与图标生成的真实 CLI 回归另外位于
-`tests/release-prepare.test.ts`、`tests/file-type-icons-build.test.ts`；TS helper 测试也会导入共享 smoke 模块。
+`tests/release-prepare.test.ts`、`tests/file-type-icons-build.test.ts`。CodeGraph helper 源码及构建发布在独立仓库。
 
 Cargo 保持经根目录的 `cargo-agent.sh` 进入，缓存实现位于 `dev/rust-cache.mjs`；
 每个 worktree 继续使用独立 target。脚本的 cwd、参数、环境、输出与运行时产物名称属于调用契约，

@@ -864,31 +864,19 @@ async fn recovery_removes_interrupted_before_worktree() {
 
 /// 从真实安装的 Rust 包经生产支持包工厂、Review 固定提交到前端 DTO。
 #[tokio::test]
-#[ignore = "需要真实 NARRANT_NATIVE_PACKS Rust 优化支持包"]
+#[ignore = "需要真实 NARRANT_CODEGRAPH_ARTIFACTS Rust 优化支持包"]
 async fn real_rust_pack_flows_through_review_lifecycle_to_dto() {
     use httpmock::prelude::*;
     let fixture = Fixture::new().await;
     let artifacts =
-        PathBuf::from(std::env::var_os("NARRANT_NATIVE_PACKS").expect("真实 Rust 包目录"));
+        PathBuf::from(std::env::var_os("NARRANT_CODEGRAPH_ARTIFACTS").expect("真实 Rust 包目录"));
     let target = if cfg!(windows) {
         "x86_64-pc-windows-msvc"
     } else {
         "aarch64-apple-darwin"
     };
-    let catalog: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../../resources/language-support-packs.json"
-    ))
-    .unwrap();
-    let version = catalog["packs"]["rust"]["version"].as_str().unwrap();
     let server = MockServer::start();
-    for name in ["manifest.json", "pack.tar.gz"] {
-        let bytes =
-            std::fs::read(artifacts.join("rust").join(version).join(target).join(name)).unwrap();
-        server.mock(|when, then| {
-            when.path(format!("/language-pack-rust-v{version}/{target}-{name}"));
-            then.body(bytes);
-        });
-    }
+    crate::language_support::test_support::serve_artifacts(&server, &artifacts, target);
     let packs = crate::language_support::LanguageSupportPacks::with_test_origin(
         fixture._data.path().join("packs"),
         server.base_url(),
@@ -958,18 +946,27 @@ async fn real_rust_pack_flows_through_review_lifecycle_to_dto() {
 #[tokio::test]
 #[ignore = "需要固定 NARRANT_TYPESCRIPT_PACK 原生支持包"]
 async fn real_typescript_javascript_graphs_flow_through_review_lifecycle_to_dto() {
-    use crate::structure_review::{code_graph::LanguageAnalyzer, native_languages};
     let fixture = Fixture::typescript_javascript().await;
-    let root = std::env::var_os("NARRANT_TYPESCRIPT_PACK").expect("真实原生 TS 包目录");
-    let analyzer =
-        native_languages::from_pack(PackId::TypeScriptJavascript, std::path::Path::new(&root))
-            .unwrap();
+    let artifacts = PathBuf::from(
+        std::env::var_os("NARRANT_CODEGRAPH_ARTIFACTS").expect("真实 CodeGraph 产物"),
+    );
+    let target = if cfg!(windows) {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "aarch64-apple-darwin"
+    };
+    let server = httpmock::MockServer::start();
+    crate::language_support::test_support::serve_artifacts(&server, &artifacts, target);
+    let packs = crate::language_support::LanguageSupportPacks::with_test_origin(
+        fixture._data.path().join("packs"),
+        server.base_url(),
+        target.into(),
+    )
+    .unwrap();
     let application = StructureReview::new(Arc::new(|_, _, _| {
-        panic!("TS/JS-only Review 不应启动 Rust helper")
+        panic!("TS/JS-only Review 不应启动 Rust")
     }))
-    .with_typescript(Arc::new(move |input, cancelled| {
-        analyzer.clone().with_cancellation(cancelled).analyze(input)
-    }));
+    .with_support_packs(packs.clone());
     let result = application
         .analyze(
             &fixture.lifecycle,
@@ -1041,3 +1038,6 @@ mod python;
 
 #[path = "native.rs"]
 mod native;
+
+#[cfg(unix)]
+mod codegraph_lifecycle;

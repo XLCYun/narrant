@@ -22,7 +22,7 @@ test('every main pull request runs both complete acceptance suites, including dr
   for (const input of ['validation_scope: full', 'language: all', 'platform: all', 'upload_artifacts: false']) {
     assert.ok(ci.includes(input), input);
   }
-  assert.doesNotMatch(workflow('language-support-packs'), /pull_request:/);
+
   assert.match(languages, /workflow_call:/);
   assert.doesNotMatch(languages, /contents: write|\n {2}publish:|secrets:/);
 });

@@ -1,6 +1,0 @@
-[
-  [
-    "try:\n    run()\nexcept* ValueError:\n    pass",
-    "try:\n    run()\nexcept* ValueError:\n    pass"
-  ]
-]

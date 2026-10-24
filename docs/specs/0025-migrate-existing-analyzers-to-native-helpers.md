@@ -1,5 +1,13 @@
 # 将现有语言分析迁移到 Native Helper
 
+> 2026-10-19 实现归属更新：[0027](0027-independent-codegraph-project.md) 与
+> [ADR-0037](../adr/0037-extract-codegraph-behind-one-cli.md) 将图生成、原生 helper、Host、SDK
+> 发现与发布迁入 [CodeGraph](https://github.com/XLCYun/CodeGraph)。本规范的语言语义仍有效，
+> 旧 Native Host 协议现在是其私有实现；Narrant 只消费公共 CLI，保留安装、租约、diff 与 Review。
+> 当前命令与验收归属见 [支持包说明](../language-support-packs.md) 和
+> [消费验收映射](../codegraph-consumer-acceptance.md)。下文有日期的历史结果保留原义，不代表新 CLI 已发布或已通过 CI。
+
+
 状态：实现与双平台语言验收完成，2026-10-17。Q1–Q5 的兼容基线保持不变；本地 macOS
 验证、旧链退役、整分支审查和最终 GitHub-hosted macOS ARM64 / Windows x64 语言验收均已完成。
 逐项证据见[迁移验证](../research/existing-native-helper-migration-validation.md)。PR #201 仍为草稿，

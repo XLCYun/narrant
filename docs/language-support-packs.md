@@ -1,100 +1,101 @@
-# 语言支持包构建与发布
+# CodeGraph 语言支持包消费
 
-应用首次进入需要分析的“结构改动”时按需下载，不会在打开 Review 或读取状态时访问分发源。
-语言分析器收到完整安装目录后才启动；准备期间不占用 Review Workspace。
+Narrant 从 `XLCYun/CodeGraph` 消费固定 `v0.1.0`，包与引擎版本均为 `0.1.0`，
+协议为 `codegraph.analyzer/1`。七包已作为 [v0.1.0 预发布版](https://github.com/XLCYun/CodeGraph/releases/tag/v0.1.0) 公开，
+固定源码为 `0552cc97f217d772b6d883ba75cc9007d3fc8309`，支持 macOS ARM64 与 Windows x64。
+目录标记为 `published: true`，合入仍需最新提交的双平台完整消费 CI 通过。应用发布继续使用 `XLCYun/narrant` 和 `com.cyunlab.narrant`。
+职责见 [规范 0027](specs/0027-independent-codegraph-project.md)。
 
-## 版本和内容
+## 公共边界
 
-`resources/language-support-packs.json` 同时供 Rust 应用和 Node 打包脚本读取。改变任何文件内容时
-提升对应包版本并保留历史产物，不覆盖同版本。历史首版为 `1.0.0`；当前 Rust、TS/JS 和 Python
-使用未发布的 `1.1.0` 原生候选，此前双平台验收通过；迁移 GitHub-hosted 后需对最终提交重新验收：
+应用从已持有使用租约的包根启动 `bin/codegraph-<id>[.exe] analyze`。七个固定 ID 为
+`rust`、`typescript-javascript`、`python`、`java`、`go`、`csharp` 和 `c-cpp`。
+每个入口自带语言身份，消费者不传语言选择器或包根参数。
+它只传源码根、相对文件选集、测试开关与 Rust 依赖范围，写入一个 UTF-8 JSON 后关闭 stdin。
+正常输入 EOF 表示请求完整；没有 ready、cancel 或 cancelled 消息。stdout 只能包含一个带尾换行
+的最终 JSON，消费者验证 `protocol/engine_version/pack_id/type/id/outcome` 后严格构造返回图，
+并且必须观察到成功退出，才能交付成功图。启动、崩溃和强制终止可以没有最终 JSON。
+拒收封套的 `invalid_request/incompatible_protocol` 错误允许 null 或确切请求 ID；
+其他结果必须对应已接受的请求，错误分支不能附带成功图。
+取消、分析期限或传输失败会立即终止调用方拥有的整棵进程树；macOS 保留进程组及后代出生身份，
+Windows 在恢复入口执行前先分配 Job。根退出不等于后代退出；结果或根退出后收紧管道/退出期限，
+先回收所有实际后代和管道线程，再释放仓库外 scratch、工作区与支持包使用租约。
+Code Graph Difference、Git 两侧准备、Review/Snapshot、工作区保护与界面都留在 Narrant。
 
-| 包 | 内容 | 平台 |
-| --- | --- | --- |
-| Python | narrant-python，内嵌同源 ty 0.0.84 / Ruff、固定 typeshed、控制身份及实际目标锁定许可闭包 | macOS arm64 / Windows x64 |
-| Rust | narrant-rust，固定 rust-analyzer 库 revision 9074e9b；包内包含实际目标的锁定依赖许可闭包 | macOS arm64 / Windows x64 |
-| TypeScript / JavaScript | Node 24.18.0、TypeScript 6.0.3、@types/node 22.20.1、undici-types 6.21.0，随附上游许可证 | 同上 |
+公开契约以 CodeGraph 的 [protocol](https://github.com/XLCYun/CodeGraph/blob/main/docs/protocol.md)、
+[distribution](https://github.com/XLCYun/CodeGraph/blob/main/docs/distribution.md) 和
+[pack layout](https://github.com/XLCYun/CodeGraph/blob/main/docs/pack-layout.md) 为准。
+消费者不读取 `control/native.json`，也不装配 helper argv、运行时或 SDK catalog。
+必需入口为对应语言的可执行文件和五字段 `control/codegraph.json`；私有文件按 manifest
+完整性清单验证。Narrant 每次显式传入文件选集；省略 `files` 的配置发现能力属于分析器，
+不改变 Narrant 的两侧文件准备、语言路由与图合并。
 
-Rust 项目仍需要用户已有的 Cargo/rustc；标准库或完整依赖范围还需要对应工具链的 rust-src。
-应用不运行 rustup 安装命令。纯仓库范围不加载标准库。支持包不包含 npm/pnpm，TS/JS 不会安装被审查项目的依赖；Rust 的“所有依赖”范围保留原有 Cargo 策略。
+## 安装与隔离
 
-工具链检查在实际发现的 Rust 项目目录执行，包含 `src-tauri/` 这类直接子项目。
-一个分析会话只配置一套标准库；同一仓库内多个独立项目若使用不同 sysroot，
-标准库/所有依赖范围明确报错并提示切换为“仅仓库”，不把仓库根目录的默认工具链套给所有项目。
+固定 Release 的资产为 `<id>-<target>-manifest.json`、`<id>-<target>-pack.tar.gz` 和
+`SHA256SUMS`。下载器验证清单及归档的发布摘要，manifest 再验证版本、引擎、协议、完整
+`sourceCommit` 与 `sourceDirty: false`，随后有界解包并逐文件验证摘要。
+归档、解包总文件和清单上限分别是 256 MiB、1 GiB、2 MiB。
 
-## 本地构建与验收
+命令行下载器把每包的清单、归档和 `installed/` 放在同盘临时目录，全部校验通过后整目录
+提升到 `<output>/<id>/0.1.0/<target>`。七包成功后才原子替换 `candidates.json`；下载中断、
+摘要失败或解包失败会清理当次临时内容，可在同一输出目录重试。重试只复用与本次发布摘要、
+逐文件大小/摘要/权限及描述符均一致的完整包；旧下载残片和损坏缓存会重新获取。
+缓存未通过复验时，先移除旧候选索引，避免重建失败后继续暴露无效候选。
+候选 `root` 指向各包内的 `installed/`，不改变下述应用安装目录。
 
-使用仓库支持的 Node 和 `pnpm install --frozen-lockfile` 后运行：
+应用数据目录下继续使用 `language-support-packs/installed/<id>/<version>/<target>`，
+暂存位于同盘 `staging`，跨进程使用/安装/删除共用原有 `id-version-target` 锁。
+旧 Narrant 包或只有通用 `bin/codegraph[.exe]` 的旧候选即使具有相同 ID 和 `0.1.0`
+版本，也因缺少当前公开身份或固定语言入口而不可用；
+替换必须取得原锁的独占权限，不能覆盖仍被旧进程使用的目录。
+错误与取消不能返回成功空图；下载失败保留明确重试状态。
+
+## 验收入口
+
+从仓库根下载并验收固定公开发布包：
 
 ```sh
-pnpm build:language-packs --all
-# 仅当前目标；--native 会拒绝宿主架构不匹配，执行包内原生 helper 的真实分析与归档提取 smoke。
-pnpm build:language-packs --target aarch64-apple-darwin --native
-# 或 --target x86_64-pc-windows-msvc --native
+pnpm codegraph:download .tools/codegraph-packs
+pnpm codegraph:verify .tools/codegraph-packs
 ```
 
-默认输出 `dist/language-support-packs/<id>/<version>/<target>/{manifest.json,pack.tar.gz}`。
-若后续要运行前端生产构建，请用 `--output .tools/language-support-pack-artifacts`，避免 Vite 清理 dist。
-上游下载每次校验固定摘要，缓存位于 `.tools/language-pack-downloads`；不执行 npm 安装脚本。
-归档按稳定文件顺序、固定时间及权限创建，不包含系统扩展属性。清单包含归档及每个文件的 SHA-256。
+下载器只接受目录中的已发布固定版本。未发布的目录夹具仍须明确失败，不能用 skip、浮动 tag、
+历史 Narrant release 或临时重建 helper 替代真实发布证据。Narrant 不再构建或发布语言 helper。
 
-Rust 候选通过正常入口构建优化 helper，构建工具链固定 1.98.0；运行时保留项目已有 Cargo/rustc。
-支持包包含控制身份、可执行入口、实际目标依赖许可和原始许可出处，不携带项目工具链。
+`language_support/tests/released.rs` 另从空的隔离目录使用生产 `LanguageSupportPacks::new`，
+只请求 Python，验证固定 GitHub 源下载、包与源码身份及真实非空 CodeGraph。
+它不接受候选目录或源覆盖，随 Python 和全语言消费命令在两个平台执行。
+
+受控本机候选验收使用 CodeGraph 生成的真实 `manifest.json` / `pack.tar.gz`，按
+`<artifacts>/<id>/0.1.0/<target>` 放置，并提供只含公开六字段的候选数组：
+
+```json
+[{"id":"typescript-javascript","version":"0.1.0","engineVersion":"0.1.0","protocol":"codegraph.analyzer/1","target":"aarch64-apple-darwin","root":"/absolute/verified/pack-root"}]
+```
 
 ```sh
-pnpm build:language-packs --id rust --native --output .tools/language-support-pack-artifacts
-node scripts/language-packs/verify-native-analyzers.mjs .tools/language-support-pack-artifacts --language rust
+node scripts/codegraph/verify-consumer.mjs /absolute/artifacts --candidates /absolute/candidates.json --language typescript-javascript
 ```
 
-该验收覆盖真实图/diff、三档配置、隔离安装、生产 Review DTO 及取消/错误；
-历史独立 helper 证据与本地生产退役结果见 [迁移验证](research/existing-native-helper-migration-validation.md)。
+`root` 仅用于本机测试，不能写入正式 manifest。指定语言缺少候选或真实归档时必须失败。
+安装测试用本地 HTTP 提供实际候选字节，仍通过生产校验与事务安装；它不构成远端 release
+可下载证据。38 项完整 diff 测试的逐项迁移和入口见 [消费验收映射](codegraph-consumer-acceptance.md)。
 
-Python 不需要用户 Python、venv 或 Node；同源 Ruff parser/AST/codegen、ty 数据库与内嵌 typeshed
-编译进独立 `narrant-python`，应用通过公共 Native Host 构图。
-输入支持 UTF-8 `.py/.pyi`、Python 3.7–3.14，只分析本侧仓库和固定标准库。详见
-[Python 规格](specs/0023-python-language-analyzer.md)及[实现验收](research/python-implementation-validation.md)。
+## 目标项目 SDK
 
-```sh
-pnpm build:language-packs --id python --native --output .tools/language-support-pack-artifacts
-node scripts/language-packs/verify-python-analyzer.mjs .tools/language-support-pack-artifacts
-```
+支持包内的私有运行时由 CodeGraph 提供。被分析项目仍可能需要已有 Rust/Cargo/rust-src、
+JDK、Go SDK、.NET reference packs 或系统 C/C++ headers；分析不会安装这些工具。
+Narrant CI 的 `resources/codegraph-test-sdks.json` 和 `scripts/language-packs/prepare-test-sdks.mjs`
+只准备保留夹具使用的目标项目 SDK，不构建 helper，也不改变应用的公共请求。
+Java 使用 `JAVA_HOME` / `JDK_HOME` / PATH 中的 Java 安装，Go 使用 `GOROOT` / PATH 中的 Go；
+多版本 CI 夹具将各 SDK 的 bin 放到 PATH。.NET 使用正常 `DOTNET_ROOT` reference pack 布局。
+Rust 三档与测试开关继续按原语言规范执行。
 
-验证脚本委托共享原生验收入口，从正常归档提取 helper，通过仓库 Cargo 包装器依次验证
-固定历史图、各 minor 的语法/真实语义、真实安装租约、生产 Review DTO、错误与取消；
-正常退出后清理临时工具目录。Python 同样使用 1.98.0 优化构建和共享 Cargo 许可收集器。
-具体许可证据边界与本地结果见 [迁移验证](research/existing-native-helper-migration-validation.md)。
+## CI 与发布交接
 
-PR 的 `CI` 复用语言包验收 workflow，在两个原生 runner 构建并验收全部 Native Helper；
-PR 运行不上传大体积支持包。手动 `Language support packs` 入口按需上传产物并保留 7 天，
-发布入口保留完整产物。合并要求最新提交的 `Complete CI` 通过；不要手动触发 quality-gate。
-
-## 首次上线与后续发布
-
-每种语言、每个版本使用一个 `XLCYun/narrant` prerelease：
-
-```text
-https://github.com/XLCYun/narrant/releases/download/language-pack-<id>-v<version>/<target>-manifest.json
-https://github.com/XLCYun/narrant/releases/download/language-pack-<id>-v<version>/<target>-pack.tar.gz
-```
-
-1. 配置受保护 Environment `language-support-packs`，限制 main 和维护者审批。
-2. 本地及双平台验收通过后启用目录中对应版本（`published`），合入 main；运行 `Language support packs`，
-   选择完整双平台、全部语言并勾选 `publish`。部分语言/平台验收不能发布。
-3. 脚本先核验全部本地产物，再为每个语言版本创建 Draft prerelease，上传并逐字节回读两个平台的四个资产。
-   全部成功后公开，保持 `prerelease: true`、`make_latest: false`，不会覆盖应用 Stable 的 Latest。
-4. 发布后匿名回读客户端 URL；同版本只允许复用相同字节，已发布资产不修改。公开回读成功后才发布引用它的应用。
-
-发布使用本仓库 `GITHUB_TOKEN`，权限限定受保护发布 job 的 Contents 写入。
-下载只允许固定 GitHub 仓库与官方资产 CDN，保留清单/归档 SHA-256 校验；这不是独立的包签名认证。
-当前目录的七种包均未启用发布。不要删除仍被已发布应用引用的版本，支持包不追踪 Latest。
-
-## 本地存储与故障恢复
-
-当前用户应用数据目录的 `language-support-packs` 下：
-
-- `installed/<id>/<version>/<target>`：完整不可变内容，含 `installed.json` 提交标记。
-- `staging/<id>/<version>/<target>`：TempDir 承载本次下载和解压；普通失败/退出清理，崩溃后下次启动回收。
-- `locks/`：同版本跨进程锁；使用中的版本不能删除，安装提交和删除互斥。
-
-半包重试重新下载，完整包保留。设置页可删除未使用版本，包括旧版本；没有自动删除历史安装。
-磁盘占用显示包内文件的逻辑字节总和，不包含临时下载或文件系统块开销。
+PR 自动调用 `validate-language-support-packs.yml`，在 GitHub-hosted macOS ARM64 与
+Windows x64 下载精确七包，执行独立语言入口、完整图差异、安装、Review DTO 和退出屏障验收。
+CodeGraph 源码、helper、SDK 工厂与私有协议测试由其自身 CI 负责。
+`Complete CI` 仍要求 quality 和 languages 两组均成功，缺失、取消或跳过均不能放行。
+最终切换发布版本还需要真实远端下载和最新双平台 CI 证据；此前的本机候选结果不能替代。

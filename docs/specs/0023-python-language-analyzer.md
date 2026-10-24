@@ -5,6 +5,14 @@ date: 2026-09-29
 
 # Python Code Graph
 
+> 2026-10-19 实现归属更新：[0027](0027-independent-codegraph-project.md) 与
+> [ADR-0037](../adr/0037-extract-codegraph-behind-one-cli.md) 将图生成、原生 helper、Host、SDK
+> 发现与发布迁入 [CodeGraph](https://github.com/XLCYun/CodeGraph)。本规范的语言语义仍有效，
+> 旧 Native Host 协议现在是其私有实现；Narrant 只消费公共 CLI，保留安装、租约、diff 与 Review。
+> 当前命令与验收归属见 [支持包说明](../language-support-packs.md) 和
+> [消费验收映射](../codegraph-consumer-acceptance.md)。下文有日期的历史结果保留原义，不代表新 CLI 已发布或已通过 CI。
+
+
 用户已确认 Q1–Q7，设计访谈已完成。本页是实现范围、技术决定和验收条件的来源；
 规格接受不代表功能已经交付。研究依据与有限实测见
 [Python 支持调研](../research/python-structure-analysis.md)。
@@ -62,7 +70,7 @@ Q2 的取舍记入 [ADR-0033](../adr/0033-bound-python-analysis-to-repository-an
 不自动切换其他引擎。1.1.0 未发布候选已完成本地 macOS ARM64 验收，以及最终
 GitHub-hosted macOS ARM64 / Windows x64 的 helper、实际安装、图与 Review 验收。
 边界、历史断言和许可证来源限制见
-[helper 说明](../../native-helpers/python/README.md) 与
+[helper 说明](https://github.com/XLCYun/CodeGraph/blob/main/native-helpers/python/README.md) 与
 [迁移证据](../research/existing-native-helper-migration-validation.md)。
 
 当前没有未决产品问题。实现验证若推翻已确认范围或工具选择，应记录证据并重新打开对应决定，
