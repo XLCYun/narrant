@@ -91,7 +91,7 @@
 逐项保留。旧研究文档继续作为有日期的迁移证据，不能替代当前发布、平台和消费验收结果。
 
 当前生产目录固定消费已公开的 [CodeGraph v0.1.1 预发布版](https://github.com/XLCYun/CodeGraph/releases/tag/v0.1.1)，
-源码为 `d31f28a7f91c2cdbd30fd43e81e370d5ccb2c95e`。`released.rs` 从空的隔离目录
+源码为 `9d56932bd051ac39f88cf7d72aab7c552a68e562`。`released.rs` 从空的隔离目录
 通过生产下载源只安装 Python，再验证公开身份、固定源码和真实非空图；该用例随 Python
 及全语言命令在双平台执行。未发布保护使用单个测试实例内的夹具，继续覆盖实际生产守卫。
 本机候选、真实 release 下载、双平台完整 CI 三种证据分别记录；缺包不能通过 skip

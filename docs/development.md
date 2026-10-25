@@ -10,7 +10,7 @@
 逐项测试归属见 [消费验收映射](codegraph-consumer-acceptance.md)。
 
 当前生产目录消费已公开的固定 CodeGraph `v0.1.1` 预发布版，源码为
-`d31f28a7f91c2cdbd30fd43e81e370d5ccb2c95e`。生产源按需 Python 下载与真实图验收
+`9d56932bd051ac39f88cf7d72aab7c552a68e562`。生产源按需 Python 下载与真实图验收
 随完整消费命令执行。本机受控候选只证明对应语言/平台的消费链路，不能替代真实 release、
 七语言或 Windows 验收；合入前仍需最新提交的 `Complete CI` 通过。
 原生迁移的历史结果仍保留在 docs/research；这些结果不自动成为新语言入口的消费证据。

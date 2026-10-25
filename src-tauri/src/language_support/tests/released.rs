@@ -25,7 +25,7 @@ async fn real_released_python_pack_downloads_on_demand_and_analyzes() {
     let manifest = packs.inner.storage.inspect(&lease.held[0].0).unwrap();
     assert_eq!(
         manifest.source_commit,
-        "d31f28a7f91c2cdbd30fd43e81e370d5ccb2c95e"
+        "9d56932bd051ac39f88cf7d72aab7c552a68e562"
     );
     assert!(!manifest.source_dirty);
     println!(

@@ -2,7 +2,7 @@
 
 Narrant 从 `XLCYun/CodeGraph` 消费固定 `v0.1.1`，包与引擎版本均为 `0.1.1`，
 协议为 `codegraph.analyzer/1`。七包已作为 [v0.1.1 预发布版](https://github.com/XLCYun/CodeGraph/releases/tag/v0.1.1) 公开，
-固定源码为 `d31f28a7f91c2cdbd30fd43e81e370d5ccb2c95e`，支持 macOS ARM64 与 Windows x64。
+固定源码为 `9d56932bd051ac39f88cf7d72aab7c552a68e562`，支持 macOS ARM64 与 Windows x64。
 目录标记为 `published: true`，合入仍需最新提交的双平台完整消费 CI 通过。应用发布继续使用 `XLCYun/narrant` 和 `com.cyunlab.narrant`。
 职责见 [规范 0027](specs/0027-independent-codegraph-project.md)。
 
