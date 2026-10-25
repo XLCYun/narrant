@@ -6,7 +6,7 @@ use crate::structure_review::{
 
 /// 从空的隔离目录按需下载固定公开 Python 包，再通过该包返回真实源码图。
 #[tokio::test]
-#[ignore = "需要公开 CodeGraph v0.1.0 及 GitHub 网络；不接受本机候选或源覆盖"]
+#[ignore = "需要公开 CodeGraph v0.1.1 及 GitHub 网络；不接受本机候选或源覆盖"]
 async fn real_released_python_pack_downloads_on_demand_and_analyzes() {
     let root = tempfile::tempdir().unwrap();
     let packs = LanguageSupportPacks::new(root.path().into()).unwrap();
@@ -25,7 +25,7 @@ async fn real_released_python_pack_downloads_on_demand_and_analyzes() {
     let manifest = packs.inner.storage.inspect(&lease.held[0].0).unwrap();
     assert_eq!(
         manifest.source_commit,
-        "0552cc97f217d772b6d883ba75cc9007d3fc8309"
+        "d31f28a7f91c2cdbd30fd43e81e370d5ccb2c95e"
     );
     assert!(!manifest.source_dirty);
     println!(
@@ -56,8 +56,8 @@ async fn real_released_python_pack_downloads_on_demand_and_analyzes() {
             .unwrap();
     assert_eq!(
         descriptor,
-        serde_json::json!({"schema_version": 1, "pack_id": "python", "pack_version": "0.1.0",
-            "engine_version": "0.1.0", "protocol": "codegraph.analyzer/1"})
+        serde_json::json!({"schema_version": 1, "pack_id": "python", "pack_version": "0.1.1",
+            "engine_version": "0.1.1", "protocol": "codegraph.analyzer/1"})
     );
     let fixture = tempfile::tempdir().unwrap();
     let source = "def released_value():\n    return len([1, 2, 3])\n";
@@ -90,7 +90,7 @@ async fn real_released_python_pack_downloads_on_demand_and_analyzes() {
     assert_eq!(functions.len(), 1);
     let returned_source = functions[0].data().source.as_deref().unwrap();
     assert!(!returned_source.is_empty() && source.contains(returned_source));
-    println!("Released production-origin proof: python 0.1.0 codegraph.analyzer/1; requested Python only; nonempty source graph");
+    println!("Released production-origin proof: python 0.1.1 codegraph.analyzer/1; requested Python only; nonempty source graph");
     drop(lease);
     packs.shutdown().await;
 }

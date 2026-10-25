@@ -127,7 +127,7 @@ async fn real_cli_exit_and_cancellation_preserve_workspace_and_pack_barriers() {
         };
         // 留给 ProcessTree 的 10ms 轮询一次快照；仍不以此等待代替最终 PID 退出断言。
         tokio::time::sleep(Duration::from_millis(30)).await;
-        assert!(packs.remove(PackId::TypeScriptJavascript, "0.1.0").is_err());
+        assert!(packs.remove(PackId::TypeScriptJavascript, "0.1.1").is_err());
         assert!(fixture.head.exists());
         if terminate_cli {
             // SAFETY: PID 来自本夹具启动并确认仍存活的真实公共 CLI。
@@ -147,7 +147,7 @@ async fn real_cli_exit_and_cancellation_preserve_workspace_and_pack_barriers() {
         }
         assert!(!fixture.head.exists());
         assert!(!packs.snapshot().packs.iter().any(|pack| pack.in_use));
-        packs.remove(PackId::TypeScriptJavascript, "0.1.0").unwrap();
+        packs.remove(PackId::TypeScriptJavascript, "0.1.1").unwrap();
         packs.shutdown().await;
     }
 }

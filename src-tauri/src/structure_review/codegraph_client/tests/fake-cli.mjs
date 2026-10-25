@@ -24,7 +24,7 @@ if (process.argv[2] === 'descendant') {
     process.stdin.on('end', () => {
       const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       const graph = { root_contains: ['typescript:run'], nodes: [{ category: 'callable', id: 'typescript:run', language: 'typescript', native_kind: 'function', name: 'run', signature: 'run()', code: 'return 1;', source: 'function run(){return 1;}', contains: [], references: [], extensions: { 'typescript.custom': { preserved: true } } }], external_symbols: [] };
-      const result = { protocol: scenario === 'protocol' ? 'codegraph.analyzer/2' : protocol, engine_version: scenario === 'version' ? '9.0.0' : '0.1.0', pack_id: scenario === 'pack' ? 'python' : 'typescript-javascript', type: 'completed', id: scenario === 'id' ? 'other' : request.id, outcome: 'ok', graph };
+      const result = { protocol: scenario === 'protocol' ? 'codegraph.analyzer/2' : protocol, engine_version: scenario === 'version' ? '9.0.0' : '0.1.1', pack_id: scenario === 'pack' ? 'python' : 'typescript-javascript', type: 'completed', id: scenario === 'id' ? 'other' : request.id, outcome: 'ok', graph };
       if (scenario === 'hang-after-input') { setInterval(() => {}, 1000); return; }
       if (['nested','outer-death','normal-orphan','normal-held-pipe','exit-held-pipe','abnormal-held-pipe'].includes(scenario)) {
         spawn(process.execPath, [fileURLToPath(import.meta.url), 'descendant'], { detached: true, stdio: scenario.includes('held-pipe') ? ['ignore','inherit','inherit'] : 'ignore', env: process.env });
@@ -49,7 +49,7 @@ if (process.argv[2] === 'descendant') {
         if (scenario === 'error-graph') result.graph = graph;
         if (scenario === 'error-version') result.engine_version = '9.0.0';
       }
-      if (scenario === 'ready') { emit({ protocol, type: 'ready', engine_version: '0.1.0', pack_id: 'typescript-javascript' }); return; }
+      if (scenario === 'ready') { emit({ protocol, type: 'ready', engine_version: '0.1.1', pack_id: 'typescript-javascript' }); return; }
       if (scenario === 'cancelled') { delete result.graph; result.outcome = 'cancelled'; }
       if (scenario === 'graph') graph.root_contains = ['missing'];
       if (scenario === 'missing') delete graph.nodes[0].source;

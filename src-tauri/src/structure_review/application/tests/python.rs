@@ -405,7 +405,7 @@ async fn real_python_pack_flows_through_review_lifecycle_to_dto() {
         assert_eq!(error.code, "cancelled");
         assert!(!fixture.head.parent().unwrap().join("before").exists());
         packs
-            .remove(crate::language_support::PackId::Python, "0.1.0")
+            .remove(crate::language_support::PackId::Python, "0.1.1")
             .unwrap();
         packs.shutdown().await;
     }

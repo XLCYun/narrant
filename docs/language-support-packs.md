@@ -1,8 +1,8 @@
 # CodeGraph 语言支持包消费
 
-Narrant 从 `XLCYun/CodeGraph` 消费固定 `v0.1.0`，包与引擎版本均为 `0.1.0`，
-协议为 `codegraph.analyzer/1`。七包已作为 [v0.1.0 预发布版](https://github.com/XLCYun/CodeGraph/releases/tag/v0.1.0) 公开，
-固定源码为 `0552cc97f217d772b6d883ba75cc9007d3fc8309`，支持 macOS ARM64 与 Windows x64。
+Narrant 从 `XLCYun/CodeGraph` 消费固定 `v0.1.1`，包与引擎版本均为 `0.1.1`，
+协议为 `codegraph.analyzer/1`。七包已作为 [v0.1.1 预发布版](https://github.com/XLCYun/CodeGraph/releases/tag/v0.1.1) 公开，
+固定源码为 `d31f28a7f91c2cdbd30fd43e81e370d5ccb2c95e`，支持 macOS ARM64 与 Windows x64。
 目录标记为 `published: true`，合入仍需最新提交的双平台完整消费 CI 通过。应用发布继续使用 `XLCYun/narrant` 和 `com.cyunlab.narrant`。
 职责见 [规范 0027](specs/0027-independent-codegraph-project.md)。
 
@@ -38,7 +38,7 @@ Code Graph Difference、Git 两侧准备、Review/Snapshot、工作区保护与�
 归档、解包总文件和清单上限分别是 256 MiB、1 GiB、2 MiB。
 
 命令行下载器把每包的清单、归档和 `installed/` 放在同盘临时目录，全部校验通过后整目录
-提升到 `<output>/<id>/0.1.0/<target>`。七包成功后才原子替换 `candidates.json`；下载中断、
+提升到 `<output>/<id>/0.1.1/<target>`。七包成功后才原子替换 `candidates.json`；下载中断、
 摘要失败或解包失败会清理当次临时内容，可在同一输出目录重试。重试只复用与本次发布摘要、
 逐文件大小/摘要/权限及描述符均一致的完整包；旧下载残片和损坏缓存会重新获取。
 缓存未通过复验时，先移除旧候选索引，避免重建失败后继续暴露无效候选。
@@ -46,7 +46,7 @@ Code Graph Difference、Git 两侧准备、Review/Snapshot、工作区保护与�
 
 应用数据目录下继续使用 `language-support-packs/installed/<id>/<version>/<target>`，
 暂存位于同盘 `staging`，跨进程使用/安装/删除共用原有 `id-version-target` 锁。
-旧 Narrant 包或只有通用 `bin/codegraph[.exe]` 的旧候选即使具有相同 ID 和 `0.1.0`
+旧 Narrant 包或只有通用 `bin/codegraph[.exe]` 的旧候选即使具有相同 ID 和 `0.1.1`
 版本，也因缺少当前公开身份或固定语言入口而不可用；
 替换必须取得原锁的独占权限，不能覆盖仍被旧进程使用的目录。
 错误与取消不能返回成功空图；下载失败保留明确重试状态。
@@ -68,10 +68,10 @@ pnpm codegraph:verify .tools/codegraph-packs
 它不接受候选目录或源覆盖，随 Python 和全语言消费命令在两个平台执行。
 
 受控本机候选验收使用 CodeGraph 生成的真实 `manifest.json` / `pack.tar.gz`，按
-`<artifacts>/<id>/0.1.0/<target>` 放置，并提供只含公开六字段的候选数组：
+`<artifacts>/<id>/0.1.1/<target>` 放置，并提供只含公开六字段的候选数组：
 
 ```json
-[{"id":"typescript-javascript","version":"0.1.0","engineVersion":"0.1.0","protocol":"codegraph.analyzer/1","target":"aarch64-apple-darwin","root":"/absolute/verified/pack-root"}]
+[{"id":"typescript-javascript","version":"0.1.1","engineVersion":"0.1.1","protocol":"codegraph.analyzer/1","target":"aarch64-apple-darwin","root":"/absolute/verified/pack-root"}]
 ```
 
 ```sh

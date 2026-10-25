@@ -1,36 +1,36 @@
 {
   "schemaVersion": 1,
   "repository": "XLCYun/CodeGraph",
-  "tag": "v0.1.0",
-  "engineVersion": "0.1.0",
+  "tag": "v0.1.1",
+  "engineVersion": "0.1.1",
   "protocol": "codegraph.analyzer/1",
   "packs": {
     "rust": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "published": true
     },
     "typescript-javascript": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "published": true
     },
     "python": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "published": true
     },
     "java": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "published": true
     },
     "go": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "published": true
     },
     "csharp": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "published": true
     },
     "c-cpp": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "published": true
     }
   }

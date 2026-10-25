@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-pub const ENGINE_VERSION: &str = "0.1.0";
+pub const ENGINE_VERSION: &str = "0.1.1";
 pub const PROTOCOL: &str = "codegraph.analyzer/1";
 pub const PACK_IDS: &[&str] = &[
     "rust",

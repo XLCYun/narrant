@@ -13,7 +13,7 @@ pub(in crate::structure_review::codegraph_client) fn fixture(
     let pack = tempfile::tempdir().unwrap();
     fs::create_dir(pack.path().join("control")).unwrap();
     fs::create_dir(pack.path().join("bin")).unwrap();
-    fs::write(pack.path().join("control/codegraph.json"), r#"{"schema_version":1,"pack_id":"typescript-javascript","pack_version":"0.1.0","engine_version":"0.1.0","protocol":"codegraph.analyzer/1"}"#).unwrap();
+    fs::write(pack.path().join("control/codegraph.json"), r#"{"schema_version":1,"pack_id":"typescript-javascript","pack_version":"0.1.1","engine_version":"0.1.1","protocol":"codegraph.analyzer/1"}"#).unwrap();
     fs::write(
         pack.path().join(if cfg!(windows) {
             "bin/codegraph-typescript-javascript.exe"
@@ -273,7 +273,7 @@ fn descriptor_and_input_boundaries_reject_identity_and_path_ambiguity() {
         .unwrap_err()
         .message
         .contains("文件数量上限"));
-    fs::write(pack.path().join("control/codegraph.json"), r#"{"schema_version":1,"pack_id":"typescript-javascript","pack_id":"typescript-javascript","pack_version":"0.1.0","engine_version":"0.1.0","protocol":"codegraph.analyzer/1"}"#).unwrap();
+    fs::write(pack.path().join("control/codegraph.json"), r#"{"schema_version":1,"pack_id":"typescript-javascript","pack_id":"typescript-javascript","pack_version":"0.1.1","engine_version":"0.1.1","protocol":"codegraph.analyzer/1"}"#).unwrap();
     assert!(CodeGraphAnalyzer::from_pack("typescript-javascript", pack.path()).is_err());
 }
 

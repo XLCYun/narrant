@@ -907,6 +907,39 @@ fn go_real_helper_graph_and_diff() {
     exercise(Mode::Go);
 }
 
+/// 固定发布的 Go 分析器应保留普通指令示例文本，并经生产解码器交付真实函数节点。
+#[test]
+#[ignore = "require-real-tools: 固定公开 Go 分析器和 Go SDK"]
+fn go_directive_text_in_strings_produces_code_graph() {
+    let configs = config();
+    let repository = TempDir::new().unwrap();
+    put(
+        repository.path(),
+        "go.mod",
+        "module example.test/directive_text\ngo 1.23.0\n",
+    );
+    let source = r#"package directive_text
+// This example mentions //go:embed and import "C" as ordinary text.
+func Diagnostic() string { return "//go:embed" }
+"#;
+    put(repository.path(), "main.go", source);
+    let graph = analyze(
+        Mode::Go,
+        &configs,
+        repository.path(),
+        vec!["main.go".into()],
+    );
+    let (_, diagnostic) = find(&graph, "Diagnostic", CodeCategory::Callable);
+    assert!(diagnostic
+        .data()
+        .code
+        .as_deref()
+        .unwrap()
+        .contains("//go:embed"));
+    let returned_source = diagnostic.data().source.as_deref().unwrap();
+    assert!(!returned_source.is_empty() && source.contains(returned_source));
+}
+
 /// 真实 JDT 后端经 Host 构图和 diff 的验收。
 #[test]
 #[ignore = "require-real-tools: 固定 Java helper 和目标 JDK"]

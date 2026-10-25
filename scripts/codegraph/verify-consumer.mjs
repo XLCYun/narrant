@@ -13,7 +13,7 @@ export function validateCandidates(values, target, language = 'all') {
   if (!Array.isArray(values) || (language !== 'all' && !ids.includes(language))) throw new Error('Invalid CodeGraph candidate selection');
   const seen = new Set();
   for (const item of values) {
-    if (Object.keys(item).sort().join() !== ['id','version','engineVersion','protocol','target','root'].sort().join() || !ids.includes(item.id) || seen.has(item.id) || item.version !== '0.1.0' || item.engineVersion !== '0.1.0' || item.protocol !== 'codegraph.analyzer/1' || item.target !== target || !path.isAbsolute(item.root)) throw new Error('Invalid public CodeGraph candidate identity');
+    if (Object.keys(item).sort().join() !== ['id','version','engineVersion','protocol','target','root'].sort().join() || !ids.includes(item.id) || seen.has(item.id) || item.version !== '0.1.1' || item.engineVersion !== '0.1.1' || item.protocol !== 'codegraph.analyzer/1' || item.target !== target || !path.isAbsolute(item.root)) throw new Error('Invalid public CodeGraph candidate identity');
     seen.add(item.id);
   }
   for (const id of language === 'all' ? ids : [language]) if (!seen.has(id)) throw new Error(`Missing CodeGraph candidate: ${id}`);

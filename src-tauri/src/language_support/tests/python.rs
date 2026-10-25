@@ -30,7 +30,7 @@ fn fixture(missing_control: bool, executable: bool) -> (Vec<u8>, serde_json::Val
         metadata.push(serde_json::json!({"path":name,"size":source.len(),"sha256":format!("{:x}",Sha256::digest(source.as_bytes())),"executable":name.starts_with("bin/") && executable}));
     }
     let bytes = tar.into_inner().unwrap().finish().unwrap();
-    let manifest = serde_json::json!({"engineVersion":"0.1.0","protocol":"codegraph.analyzer/1","sourceCommit":"0".repeat(40),"sourceDirty":false,"schemaVersion":1,"id":"python","version":"0.1.0","target":"aarch64-apple-darwin","archiveSize":bytes.len(),"archiveSha256":format!("{:x}",Sha256::digest(&bytes)),"files":metadata});
+    let manifest = serde_json::json!({"engineVersion":"0.1.1","protocol":"codegraph.analyzer/1","sourceCommit":"0".repeat(40),"sourceDirty":false,"schemaVersion":1,"id":"python","version":"0.1.1","target":"aarch64-apple-darwin","archiveSize":bytes.len(),"archiveSha256":format!("{:x}",Sha256::digest(&bytes)),"files":metadata});
     (bytes, manifest)
 }
 
@@ -40,7 +40,7 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
     let server = MockServer::start();
     let (bytes, manifest) = fixture(false, true);
     let mut failed = server.mock(|when, then| {
-        when.path("/v0.1.0/python-aarch64-apple-darwin-manifest.json");
+        when.path("/v0.1.1/python-aarch64-apple-darwin-manifest.json");
         then.status(503);
     });
     let root = tempfile::tempdir().unwrap();
@@ -56,11 +56,11 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
         .is_err());
     failed.delete();
     let metadata = server.mock(|when, then| {
-        when.path("/v0.1.0/python-aarch64-apple-darwin-manifest.json");
+        when.path("/v0.1.1/python-aarch64-apple-darwin-manifest.json");
         then.body(super::test_support::metadata(&server, &manifest));
     });
     server.mock(|when, then| {
-        when.path("/v0.1.0/python-aarch64-apple-darwin-pack.tar.gz");
+        when.path("/v0.1.1/python-aarch64-apple-darwin-pack.tar.gz");
         then.body(bytes);
     });
     packs.retry(PackId::Python).unwrap();
@@ -82,7 +82,7 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
         .unwrap(),
         super::test_support::descriptor("python")
     );
-    assert!(packs.remove(PackId::Python, "0.1.0").is_err());
+    assert!(packs.remove(PackId::Python, "0.1.1").is_err());
     drop(lease);
     packs.shutdown().await;
     drop(packs);
@@ -108,7 +108,7 @@ async fn python_pack_retries_then_holds_its_installation_until_the_lease_ends() 
         .unwrap();
     metadata.assert_hits(1);
     drop(lease);
-    assert!(reopened.remove(PackId::Python, "0.1.0").is_ok());
+    assert!(reopened.remove(PackId::Python, "0.1.1").is_ok());
     reopened.shutdown().await;
 }
 
@@ -126,11 +126,11 @@ async fn python_pack_rejects_incomplete_or_corrupted_payloads() {
             bytes[0] ^= 1;
         }
         server.mock(|when, then| {
-            when.path("/v0.1.0/python-aarch64-apple-darwin-manifest.json");
+            when.path("/v0.1.1/python-aarch64-apple-darwin-manifest.json");
             then.body(super::test_support::metadata(&server, &manifest));
         });
         server.mock(|when, then| {
-            when.path("/v0.1.0/python-aarch64-apple-darwin-pack.tar.gz");
+            when.path("/v0.1.1/python-aarch64-apple-darwin-pack.tar.gz");
             then.body(bytes);
         });
         let root = tempfile::tempdir().unwrap();
@@ -229,8 +229,8 @@ async fn real_installed_python_pack_analyzes_without_user_python() {
         !error.is_cancelled() && error.message.contains("analysis_failed"),
         "{error}"
     );
-    assert!(packs.remove(PackId::Python, "0.1.0").is_err());
+    assert!(packs.remove(PackId::Python, "0.1.1").is_err());
     drop(lease);
-    packs.remove(PackId::Python, "0.1.0").unwrap();
+    packs.remove(PackId::Python, "0.1.1").unwrap();
     packs.shutdown().await;
 }

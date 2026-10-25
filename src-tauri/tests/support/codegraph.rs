@@ -28,8 +28,8 @@ pub fn candidates() -> BTreeMap<String, Candidate> {
     };
     let mut candidates = BTreeMap::new();
     for value in values {
-        assert_eq!(value.version, "0.1.0");
-        assert_eq!(value.engine_version, "0.1.0");
+        assert_eq!(value.version, "0.1.1");
+        assert_eq!(value.engine_version, "0.1.1");
         assert_eq!(value.protocol, "codegraph.analyzer/1");
         assert_eq!(value.target, target);
         assert!(value.root.is_absolute() && value.root.is_dir());

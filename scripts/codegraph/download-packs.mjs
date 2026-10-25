@@ -11,12 +11,12 @@ export const targets = { 'darwin-arm64': 'aarch64-apple-darwin', 'win32-x64': 'x
 export const ids = ['rust', 'typescript-javascript', 'python', 'java', 'go', 'csharp', 'c-cpp'];
 export const limits = { manifest: 2 * 1024 * 1024, archive: 256 * 1024 * 1024, unpacked: 1024 * 1024 * 1024 };
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const origin = 'https://github.com/XLCYun/CodeGraph/releases/download/v0.1.0';
+const origin = 'https://github.com/XLCYun/CodeGraph/releases/download/v0.1.1';
 
 /** 固定发布元数据不能把消费者切换到浮动 tag 或另一个项目。 */
 export function validateCatalog(value) {
-  if (value.repository !== 'XLCYun/CodeGraph' || value.tag !== 'v0.1.0' || value.engineVersion !== '0.1.0' || value.protocol !== 'codegraph.analyzer/1' || Object.keys(value.packs ?? {}).sort().join() !== [...ids].sort().join()) throw new Error('CodeGraph catalog identity mismatch');
-  for (const id of ids) if (value.packs[id].version !== '0.1.0' || value.packs[id].published !== true) throw new Error(`CodeGraph ${id} 0.1.0 is unpublished; real release is required`);
+  if (value.repository !== 'XLCYun/CodeGraph' || value.tag !== 'v0.1.1' || value.engineVersion !== '0.1.1' || value.protocol !== 'codegraph.analyzer/1' || Object.keys(value.packs ?? {}).sort().join() !== [...ids].sort().join()) throw new Error('CodeGraph catalog identity mismatch');
+  for (const id of ids) if (value.packs[id].version !== '0.1.1' || value.packs[id].published !== true) throw new Error(`CodeGraph ${id} 0.1.1 is unpublished; real release is required`);
   return value;
 }
 
@@ -31,7 +31,7 @@ export function validateManifest(bytes, id, target) {
   const manifest = JSON.parse(bytes.toString('utf8'));
   if (!Buffer.from(JSON.stringify(manifest) + '\n').equals(bytes)) throw new Error('Manifest must be canonical JSON without duplicate keys');
   const fields = ['schemaVersion','id','version','target','engineVersion','protocol','sourceCommit','sourceDirty','archiveSize','archiveSha256','files'];
-  if (Object.keys(manifest).sort().join() !== fields.sort().join() || manifest.schemaVersion !== 1 || manifest.id !== id || manifest.version !== '0.1.0' || manifest.engineVersion !== '0.1.0' || manifest.protocol !== 'codegraph.analyzer/1' || manifest.target !== target || manifest.sourceDirty !== false || !/^[0-9a-f]{40}$/.test(manifest.sourceCommit) || !Number.isSafeInteger(manifest.archiveSize) || manifest.archiveSize <= 0 || manifest.archiveSize > limits.archive || !/^[0-9a-f]{64}$/.test(manifest.archiveSha256) || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 20000) throw new Error('Invalid CodeGraph manifest identity or limits');
+  if (Object.keys(manifest).sort().join() !== fields.sort().join() || manifest.schemaVersion !== 1 || manifest.id !== id || manifest.version !== '0.1.1' || manifest.engineVersion !== '0.1.1' || manifest.protocol !== 'codegraph.analyzer/1' || manifest.target !== target || manifest.sourceDirty !== false || !/^[0-9a-f]{40}$/.test(manifest.sourceCommit) || !Number.isSafeInteger(manifest.archiveSize) || manifest.archiveSize <= 0 || manifest.archiveSize > limits.archive || !/^[0-9a-f]{64}$/.test(manifest.archiveSha256) || !Array.isArray(manifest.files) || !manifest.files.length || manifest.files.length > 20000) throw new Error('Invalid CodeGraph manifest identity or limits');
   let size = 0;
   const names = new Set();
   for (const file of manifest.files) {
@@ -191,7 +191,7 @@ export async function downloadPacks(output) {
     const sums = checksums(await fs.readFile(sumfile));
     let commit;
     for (const id of ids) {
-      const packageRoot = path.join(output, id, '0.1.0', target);
+      const packageRoot = path.join(output, id, '0.1.1', target);
       let manifest = await cachedPackage(packageRoot, id, target, sums);
       if (!manifest) {
         // 旧索引不能继续指向未通过复验、即将重建的内容。

@@ -129,7 +129,7 @@ fn manifest_requires_public_cli_and_descriptor_on_both_targets() {
                 id,
                 version: key.version.clone(),
                 target: target.into(),
-                engine_version: "0.1.0".into(),
+                engine_version: "0.1.1".into(),
                 protocol: "codegraph.analyzer/1".into(),
                 source_commit: "0".repeat(40),
                 source_dirty: false,

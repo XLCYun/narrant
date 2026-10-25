@@ -18,7 +18,7 @@ async function fixture(root, id = 'rust', target = 'aarch64-apple-darwin') {
   const input = path.join(root, 'input');
   await fs.mkdir(path.join(input,'bin'),{recursive:true});
   await fs.mkdir(path.join(input,'control'));
-  const descriptor = JSON.stringify({schema_version:1,pack_id:id,pack_version:'0.1.0',engine_version:'0.1.0',protocol:'codegraph.analyzer/1'}) + '\n';
+  const descriptor = JSON.stringify({schema_version:1,pack_id:id,pack_version:'0.1.1',engine_version:'0.1.1',protocol:'codegraph.analyzer/1'}) + '\n';
   const entry = 'bin/codegraph-' + id + (target === 'x86_64-pc-windows-msvc' ? '.exe' : '');
   await fs.writeFile(path.join(input,entry), 'fixture');
   await fs.chmod(path.join(input,entry), 0o755);
@@ -26,7 +26,7 @@ async function fixture(root, id = 'rust', target = 'aarch64-apple-darwin') {
   const archive = path.join(root,'pack.tar.gz');
   await tar.c({file:archive,cwd:input,gzip:true,portable:true,filter(name,stat) { stat.mode = (stat.mode & ~0o777) | (name === entry ? 0o755 : 0o644); return true; }},[entry,'control/codegraph.json']);
   const bytes = await fs.readFile(archive);
-  const manifest = {schemaVersion:1,id,version:'0.1.0',target,engineVersion:'0.1.0',protocol:'codegraph.analyzer/1',sourceCommit:'a'.repeat(40),sourceDirty:false,archiveSize:bytes.length,archiveSha256:hash(bytes),files:[{path:entry,size:7,sha256:hash('fixture'),executable:true},{path:'control/codegraph.json',size:Buffer.byteLength(descriptor),sha256:hash(descriptor),executable:false}]};
+  const manifest = {schemaVersion:1,id,version:'0.1.1',target,engineVersion:'0.1.1',protocol:'codegraph.analyzer/1',sourceCommit:'a'.repeat(40),sourceDirty:false,archiveSize:bytes.length,archiveSha256:hash(bytes),files:[{path:entry,size:7,sha256:hash('fixture'),executable:true},{path:'control/codegraph.json',size:Buffer.byteLength(descriptor),sha256:hash(descriptor),executable:false}]};
   return {manifest,archive,input};
 }
 
@@ -49,7 +49,7 @@ async function releaseFixture(root, context, intercept = () => undefined) {
   const requests = [];
   context.mock.method(globalThis, 'fetch', async url => {
     assert.equal(new URL(url).origin, 'https://github.com');
-    assert.ok(new URL(url).pathname.startsWith('/XLCYun/CodeGraph/releases/download/v0.1.0/'));
+    assert.ok(new URL(url).pathname.startsWith('/XLCYun/CodeGraph/releases/download/v0.1.1/'));
     const name = new URL(url).pathname.split('/').at(-1);
     requests.push(name);
     const bytes = assets.get(name);
@@ -94,7 +94,7 @@ test('download replaces incomplete legacy output and revalidates every cached fi
     const { target, requests } = await releaseFixture(root, context, name => {
       if (unavailable && name.startsWith('rust-') && name.endsWith('manifest.json')) return new Response('', { status: 503 });
     });
-    const packageRoot = path.join(output, 'rust', '0.1.0', target);
+    const packageRoot = path.join(output, 'rust', '0.1.1', target);
     await fs.mkdir(packageRoot, { recursive: true });
     await fs.writeFile(path.join(packageRoot, 'manifest.json'), '{partial');
     await fs.writeFile(path.join(packageRoot, 'pack.tar.gz'), 'partial');
@@ -131,7 +131,7 @@ test('download restores previous output if package promotion fails and remains r
   const output = path.join(root, 'output');
   try {
     const { target } = await releaseFixture(root, context);
-    const packageRoot = path.join(output, 'rust', '0.1.0', target);
+    const packageRoot = path.join(output, 'rust', '0.1.1', target);
     await fs.mkdir(packageRoot, { recursive: true });
     await fs.writeFile(path.join(packageRoot, 'manifest.json'), 'previous incomplete download');
     const rename = fs.rename.bind(fs);
@@ -175,7 +175,7 @@ for (const failure of ['release checksum', 'extracted checksum']) {
       }
       await assert.rejects(downloadPacks(output), /checksum/);
       await assert.rejects(fs.access(path.join(output, 'candidates.json')), { code: 'ENOENT' });
-      await assert.rejects(fs.access(path.join(output, 'typescript-javascript', '0.1.0', target)), { code: 'ENOENT' });
+      await assert.rejects(fs.access(path.join(output, 'typescript-javascript', '0.1.1', target)), { code: 'ENOENT' });
       assert.equal((await fs.readdir(output)).some(name => name.startsWith('.download-')), false);
       assets.set(manifestName, originalManifest);
       assets.set('SHA256SUMS', originalSums);
@@ -220,7 +220,7 @@ test('all seven manifests require their fixed executable entry on both targets',
 });
 
 test('candidate configuration accepts only public identities and rejects absent selected packs', () => {
-  const value = {id:'rust',version:'0.1.0',engineVersion:'0.1.0',protocol:'codegraph.analyzer/1',target:'aarch64-apple-darwin',root:path.resolve('/tmp/candidate')};
+  const value = {id:'rust',version:'0.1.1',engineVersion:'0.1.1',protocol:'codegraph.analyzer/1',target:'aarch64-apple-darwin',root:path.resolve('/tmp/candidate')};
   validateCandidates([value], value.target, 'rust');
   assert.throws(() => validateCandidates([value],value.target,'all'), /Missing/);
   assert.throws(() => validateCandidates([{...value,environment:{}}],value.target,'rust'), /identity/);
