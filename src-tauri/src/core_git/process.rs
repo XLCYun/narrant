@@ -1,4 +1,5 @@
 use super::*;
+use crate::child_process::ProcessTree;
 use tokio_util::sync::CancellationToken;
 
 impl CoreGitProcess {
@@ -140,24 +141,13 @@ fn execute_core_git(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::child_process::configure_std_command(&mut command);
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        });
-    }
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = ProcessTree::spawn(&mut command).map_err(|error| {
         CoreGitFailure::from_kind(
             CoreGitFailureKind::SpawnFailed,
             format!("无法启动 Core Git：{error}"),
         )
     })?;
-    let Some(stdout) = child.stdout.take() else {
+    let Some(stdout) = child.take_stdout() else {
         terminate_process_tree(&mut child).map_err(|detail| {
             CoreGitFailure::from_kind(CoreGitFailureKind::TerminationFailed, detail)
         })?;
@@ -166,7 +156,7 @@ fn execute_core_git(
             "无法读取 Core Git 标准输出",
         ));
     };
-    let Some(stderr) = child.stderr.take() else {
+    let Some(stderr) = child.take_stderr() else {
         terminate_process_tree(&mut child).map_err(|detail| {
             CoreGitFailure::from_kind(CoreGitFailureKind::TerminationFailed, detail)
         })?;
@@ -216,7 +206,7 @@ fn execute_core_git(
             return Err(failure.expect("failure was set before termination"));
         }
         if status.is_none() {
-            match child.try_wait() {
+            match child.status() {
                 Ok(Some(exit)) => status = Some(exit),
                 Ok(None) => {}
                 Err(error) => {
@@ -246,6 +236,9 @@ fn execute_core_git(
         }
     }
 
+    terminate_process_tree(&mut child).map_err(|detail| {
+        CoreGitFailure::from_kind(CoreGitFailureKind::TerminationFailed, detail)
+    })?;
     if let Some(failure) = failure {
         return Err(failure);
     }
@@ -401,47 +394,9 @@ fn drain_reader_events(
     Ok(())
 }
 
-fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        let child_already_exited = child
-            .try_wait()
-            .map_err(|error| format!("无法检查 Core Git 子进程状态：{error}"))?
-            .is_some();
-        let process_group = -(child.id() as i32);
-        let group_result = unsafe { libc::kill(process_group, libc::SIGKILL) };
-        if group_result != 0 {
-            let group_error = std::io::Error::last_os_error();
-            if group_error.raw_os_error() != Some(libc::ESRCH) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("无法终止 Core Git 进程组：{group_error}"));
-            }
-        }
-        if child_already_exited {
-            return Ok(());
-        }
-    }
-    #[cfg(windows)]
-    {
-        let process_id = child.id().to_string();
-        let mut command = Command::new("taskkill");
-        command
-            .args(["/PID", &process_id, "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        crate::child_process::configure_std_command(&mut command);
-        let status = command
-            .status()
-            .map_err(|error| format!("无法启动 Core Git 进程树终止命令：{error}"))?;
-        if !status.success() && child.try_wait().ok().flatten().is_none() {
-            return Err(format!("Core Git 进程树终止命令失败：{status}"));
-        }
-    }
-    let _ = child.kill();
+/// 使用共享所有者同步终止并回收根与后代，根已退出时也保留进程树责任。
+fn terminate_process_tree(child: &mut ProcessTree) -> Result<(), String> {
     child
-        .wait()
-        .map(|_| ())
-        .map_err(|error| format!("无法回收 Core Git 子进程：{error}"))
+        .reap()
+        .map_err(|error| format!("无法回收 Core Git 进程树：{error}"))
 }

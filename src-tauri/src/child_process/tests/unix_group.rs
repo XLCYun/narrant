@@ -15,6 +15,69 @@ fn permission_denied_never_means_group_disappeared() {
     );
 }
 
+/// 首轮信号与 fork 交错后出现的同组成员也必须被终止，根退出不能提前结束屏障。
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn exit_barrier_reaps_group_member_born_after_initial_signal() {
+    use super::ProcessGroup;
+    use std::{
+        io::Read,
+        os::unix::process::{CommandExt, ExitStatusExt},
+        process::{Command, Stdio},
+    };
+
+    let mut root = Command::new("/bin/sleep")
+        .arg("60")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut group = ProcessGroup::new(root.id());
+    group.snapshot();
+    group.terminate().unwrap();
+
+    // 根保留为 zombie，使组号不会复用；在首轮信号之后加入尚未被快照的新成员。
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: 仅等待本测试的直接 Child，并保留其 PID 和进程组。
+    assert_eq!(
+        unsafe {
+            libc::waitid(
+                libc::P_PID,
+                root.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        },
+        0
+    );
+    let mut late = Command::new("/bin/sleep")
+        .arg("60")
+        .process_group(root.id() as i32)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let late_pid = late.id() as i32;
+    let mut stdout = late.stdout.take().unwrap();
+    let mut stderr = late.stderr.take().unwrap();
+    root.wait().unwrap();
+    assert!(!group.members.contains_key(&late_pid));
+
+    // 独立等待真正的直接 Child，生产屏障负责发信号，避免由测试兜底提前制造成功。
+    let reaper = std::thread::spawn(move || late.wait().unwrap());
+    let result = group.wait();
+    if result.is_err() {
+        // SAFETY: 失败路径清理仍被 reaper 持有的本测试 Child，不改变已采集的屏障结果。
+        unsafe { libc::kill(late_pid, libc::SIGKILL) };
+    }
+    let status = reaper.join().unwrap();
+    let mut output = Vec::new();
+    stdout.read_to_end(&mut output).unwrap();
+    stderr.read_to_end(&mut output).unwrap();
+    assert_eq!(status.signal(), Some(libc::SIGKILL));
+    assert!(output.is_empty());
+    result.expect("首轮信号后出现的同组后代及其输出管道必须在退出屏障内回收");
+}
+
 /// macOS 的已退出对象会先失去 BSDINFO，但裸 PID 在父进程 wait 前仍存在。
 #[cfg(target_os = "macos")]
 #[test]

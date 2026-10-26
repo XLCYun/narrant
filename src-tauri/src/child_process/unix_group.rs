@@ -80,7 +80,7 @@ impl ProcessGroup {
         failure.map_or(Ok(()), Err)
     }
 
-    /// 根 Child 已回收后检查组与快照；不能把父退出当作整棵树完成。
+    /// 根已回收后继续终止残留成员，覆盖首轮信号与 fork 交错时刚出现的后代。
     pub(super) fn wait(&self) -> io::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -99,6 +99,12 @@ impl ProcessGroup {
             }
             if Instant::now() >= deadline {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "子进程树回收超时"));
+            }
+            if let Err(error) = self.terminate() {
+                // macOS 的纯 zombie 组可能拒绝信号；仍须等到组和已记录成员都消失。
+                if error.raw_os_error() != Some(libc::EPERM) {
+                    return Err(error);
+                }
             }
             std::thread::sleep(Duration::from_millis(10));
         }

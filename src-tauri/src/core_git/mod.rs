@@ -6,9 +6,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-
 const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const WORKSPACE_INSPECT_TIMEOUT: Duration = Duration::from_secs(60);
 const WORKSPACE_MUTATION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
