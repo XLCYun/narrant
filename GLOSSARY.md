@@ -75,8 +75,9 @@ _Avoid_: Entire subtree source, full-file content
 
 **Code Graph**:
 A representation of **Code Objects** and their relationships within a selected file
-scope at one fixed side of a **Change Comparison**. Membership is independent of
-which objects a **Review View** currently displays.
+scope of one fixed source state. In Narrant, it represents one side of a
+**Change Comparison**; membership is independent of which objects a **Review View**
+currently displays.
 _Avoid_: Text diff, syntax tree
 
 **Configuration Union Code Graph（配置并集代码图）**:
@@ -120,8 +121,29 @@ _Avoid_: Repository map, new Review
 **Language Support Pack（语言支持包）**:
 An optional Narrant component that provides reusable capabilities for understanding
 one or more programming languages. **Structure Changes** is its first consumer; other
-language-aware features may also use those capabilities.
+language-aware features may also use those capabilities. For Code Graph generation,
+Narrant installs an exact-version **Analyzer Package** from CodeGraph.
 _Avoid_: Structure-only support pack, translation pack, project dependencies
+
+**Language Analyzer（语言分析器）**:
+A CodeGraph product that independently analyzes one or more programming languages
+and returns a **Code Graph** through the shared analysis protocol.
+_Avoid_: Native Helper, Narrant Helper, umbrella CLI
+
+**Analyzer Package（分析器包）**:
+A versioned distribution of a **Language Analyzer**, including its directly callable
+entry and required dependencies. Narrant manages installation and use of these packages.
+_Avoid_: Helper package, project dependencies
+
+**Analyzer Runtime（分析器运行时）**:
+The execution environment required by a **Language Analyzer** itself, distinct from
+the target version and platform of the analyzed project.
+_Avoid_: Project Target SDK
+
+**Project Target SDK（项目目标 SDK）**:
+The standard library, type declarations, platform headers and required toolchain
+resources corresponding to the analyzed project's target version and platform.
+_Avoid_: Analyzer Runtime, Analyzer Package
 
 **Review Snapshot**:
 An immutable **Change Comparison** that became current for a **Review**, pinned to exact
@@ -298,7 +320,7 @@ _Avoid_: Stateless patch, full response repair
   **Comparison Base** from the current base and head commits; a Pull Request does not
   import GitHub's historical Files changed anchor
 - A **Change Comparison** contains zero or more **File Changes**
-- A **Code Graph** represents **Code Objects** at the Comparison Base or Head revision
+- In Narrant, a **Code Graph** represents **Code Objects** at the Comparison Base or Head revision
   of a **Change Comparison**
 - A **Code Graph Difference** compares the before Code Graph to the after Code Graph
   of the same **Change Comparison**

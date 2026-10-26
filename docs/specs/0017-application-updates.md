@@ -3,7 +3,7 @@
 ## Problem Statement
 
 应用需要在工作不中断、签名可信、退出清理完整的前提下交付更新。源码、版本、Release、
-升级 manifest 与语言支持包统一位于 `XLCYun/narrant`，由 GitHub-hosted 临时机器构建和验收。
+升级 manifest 位于 `XLCYun/narrant`，由 GitHub-hosted 临时机器构建和验收。
 
 Narrant 还同时持有 Review Workspace、Git 操作和 Babysit provider 进程。应用更新不能
 绕过既有退出清理，也不能在清理超时后冒险替换正在使用的程序文件。
@@ -137,7 +137,7 @@ Draft 尚未发布，因此 `pub_date` 可以省略；Notes 来自 Release body�
 - 使用本仓库 `GITHUB_TOKEN`：构建/验收只读，Draft 与受保护 promotion job 获得 Contents 写权限。
 - 私钥和密码只供签名步骤使用，不写入源码、Release、日志或证据。
 - Draft 可在失败重试中重建资产；已发布 Release 不得被自动化修改。
-- 语言支持包使用独立 `language-pack-<id>-v<version>` prerelease，永不成为应用 Latest。
+- 语言支持包由 `XLCYun/CodeGraph` 独立固定发布，不参与应用 Latest；见 [0027](0027-independent-codegraph-project.md)。
 
 ### Native smoke and promotion
 

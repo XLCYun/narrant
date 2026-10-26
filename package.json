@@ -8,8 +8,6 @@
     "node": ">=22.13 <26"
   },
   "scripts": {
-    "build:language-packs": "node scripts/language-packs/build-language-support-packs.mjs",
-    "publish:language-packs": "node scripts/language-packs/publish-language-support-packs.mjs",
     "generate:file-icons": "node scripts/dev/generate-file-type-icons.mjs",
     "release:prepare": "node scripts/release/release-prepare.mjs",
     "predev": "pnpm generate:file-icons",
@@ -31,7 +29,9 @@
     "rust:cache:status": "node scripts/dev/rust-cache.mjs status",
     "rust:cache:clean": "node scripts/dev/rust-cache.mjs clean",
     "test:scripts": "node --test scripts/tests/*.test.mjs",
-    "td": "pnpm tauri dev"
+    "td": "pnpm tauri dev",
+    "codegraph:download": "node scripts/codegraph/download-packs.mjs",
+    "codegraph:verify": "node scripts/codegraph/verify-consumer.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

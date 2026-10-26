@@ -1,5 +1,9 @@
 # 脚本目录组织
 
+> 2026-10-19 后续变更：下文保存 Issue #204 的目录整理基线。CodeGraph 提取后的现行入口见
+> [脚本导航](../../scripts/README.md)及[语言包消费说明](../language-support-packs.md)。helper 构建、
+> 发布和源码测试已归独立 CodeGraph；旧脚本链接不再是 Narrant 的执行入口。
+
 Status: Accepted — 用户于 2026-10-19 明确要求优先通过文件夹整理脚本，其次才考虑内部代码重构；
 目录整理直接在 Issue #204、本聊天和同一个 PR 中实现，不另拆实施 Issue。
 
@@ -133,22 +137,22 @@ Native 包构建器仍由入口注入 `packageDirectory`，保留原有依赖方
 | [scripts/dev/run-live-custom-provider-e2e.mjs](../../scripts/dev/run-live-custom-provider-e2e.mjs) | 人工真实模型 E2E 的配置与进程入口 |
 | [scripts/dev/run-tauri.mjs](../../scripts/dev/run-tauri.mjs) | pnpm/Tauri 参数、签名公钥配置与进程退出 |
 | [scripts/dev/rust-cache.mjs](../../scripts/dev/rust-cache.mjs) | sccache 环境、状态和受限缓存清理 |
-| [scripts/language-packs/archive-validation.mjs](../../scripts/language-packs/archive-validation.mjs) | 归档条目、前缀和路径逃逸校验 |
-| [scripts/language-packs/build-language-support-packs.mjs](../../scripts/language-packs/build-language-support-packs.mjs) | 支持包构建入口、通用归档及 TS recipe |
-| [scripts/language-packs/build-migrating-native-helper.mjs](../../scripts/language-packs/build-migrating-native-helper.mjs) | Rust/Python helper 编译与 TS 协议文件暂存 |
-| [scripts/language-packs/native-language-support-packs.mjs](../../scripts/language-packs/native-language-support-packs.mjs) | 原生语言 recipe、许可、smoke 与验收配置 |
-| [scripts/language-packs/native-migration.mjs](../../scripts/language-packs/native-migration.mjs) | 七套现行 Native Helper 与工具链选择 |
-| [scripts/language-packs/native-xz-extraction.mjs](../../scripts/language-packs/native-xz-extraction.mjs) | 有界 XZ/TAR 管道与 Windows 子进程回收 |
+| `scripts/language-packs/archive-validation.mjs` | 归档条目、前缀和路径逃逸校验 |
+| `scripts/language-packs/build-language-support-packs.mjs` | 支持包构建入口、通用归档及 TS recipe |
+| `scripts/language-packs/build-migrating-native-helper.mjs` | Rust/Python helper 编译与 TS 协议文件暂存 |
+| `scripts/language-packs/native-language-support-packs.mjs` | 原生语言 recipe、许可、smoke 与验收配置 |
+| `scripts/language-packs/native-migration.mjs` | 七套现行 Native Helper 与工具链选择 |
+| `scripts/language-packs/native-xz-extraction.mjs` | 有界 XZ/TAR 管道与 Windows 子进程回收 |
 | [scripts/language-packs/prepare-rust-native-tests.mjs](../../scripts/language-packs/prepare-rust-native-tests.mjs) | 历史 Cargo 与项目工具链的测试前置检查 |
-| [scripts/language-packs/provision-native-toolchains.mjs](../../scripts/language-packs/provision-native-toolchains.mjs) | 校验固定 SDK 下载、解包和环境输出 |
-| [scripts/language-packs/publish-language-support-packs.mjs](../../scripts/language-packs/publish-language-support-packs.mjs) | 不可变语言 prerelease 发布与公开回读 |
-| [scripts/language-packs/run-rust-helper-test.mjs](../../scripts/language-packs/run-rust-helper-test.mjs) | Cargo test runner 的项目工具链环境还原 |
+| `scripts/language-packs/provision-native-toolchains.mjs` | 校验固定 SDK 下载、解包和环境输出 |
+| `scripts/language-packs/publish-language-support-packs.mjs` | 不可变语言 prerelease 发布与公开回读 |
+| `scripts/language-packs/run-rust-helper-test.mjs` | Cargo test runner 的项目工具链环境还原 |
 | [scripts/language-packs/run-windows-lifecycle-tests.mjs](../../scripts/language-packs/run-windows-lifecycle-tests.mjs) | Windows 生产进程所有者聚合验收入口 |
 | [scripts/language-packs/run-windows-process-probe.mjs](../../scripts/language-packs/run-windows-process-probe.mjs) | 带 Node 身份诊断的 Windows 进程验收入口 |
-| [scripts/language-packs/select-msvc-redist.mjs](../../scripts/language-packs/select-msvc-redist.mjs) | 精确 MSVC runtime 与 DLL 版本选择 |
-| [scripts/language-packs/typescript-native-smoke.mjs](../../scripts/language-packs/typescript-native-smoke.mjs) | TS helper 协议、图和退出生命周期 smoke |
-| [scripts/language-packs/verify-native-analyzers.mjs](../../scripts/language-packs/verify-native-analyzers.mjs) | 语言包构建与 helper/Host/安装/Review 验收编排 |
-| [scripts/language-packs/verify-python-analyzer.mjs](../../scripts/language-packs/verify-python-analyzer.mjs) | 委托共享 Native 验收的 Python 窄入口 |
+| `scripts/language-packs/select-msvc-redist.mjs` | 精确 MSVC runtime 与 DLL 版本选择 |
+| `scripts/language-packs/typescript-native-smoke.mjs` | TS helper 协议、图和退出生命周期 smoke |
+| `scripts/language-packs/verify-native-analyzers.mjs` | 语言包构建与 helper/Host/安装/Review 验收编排 |
+| `scripts/language-packs/verify-python-analyzer.mjs` | 委托共享 Native 验收的 Python 窄入口 |
 | [scripts/release/build-macos-signed.sh](../../scripts/release/build-macos-signed.sh) | 本地 macOS 签名、公证与 DMG 校验 |
 | [scripts/release/generate-public-release-notes.mjs](../../scripts/release/generate-public-release-notes.mjs) | 按稳定 tag 与 commit 主题生成 Release Notes |
 | [scripts/release/prepare-draft-assets.mjs](../../scripts/release/prepare-draft-assets.mjs) | Draft 资产准备的 CLI 参数与环境入口 |

@@ -8,7 +8,7 @@ use std::{
 /// 保存优雅退出前的组成员，macOS 僵尸即使离组仍须等待系统回收。
 pub(super) struct ProcessGroup {
     id: i32,
-    members: Vec<i32>,
+    members: std::collections::BTreeMap<i32, (u64, u64)>,
 }
 
 impl ProcessGroup {
@@ -16,7 +16,7 @@ impl ProcessGroup {
     pub(super) fn new(root: u32) -> Self {
         Self {
             id: root as i32,
-            members: Vec::new(),
+            members: Default::default(),
         }
     }
 
@@ -35,42 +35,94 @@ impl ProcessGroup {
 
     /// 必须先快照再等待根进程；重试时保留上次尚未确认消失的后代。
     pub(super) fn snapshot(&mut self) {
-        self.members.extend(group_members(self.id));
-        self.members.sort_unstable();
-        self.members.dedup();
+        let mut pending = vec![self.id];
+        pending.extend(
+            self.members
+                .iter()
+                .filter_map(|(&pid, &stamp)| (identity(pid) == Some(stamp)).then_some(pid)),
+        );
+        pending.extend(group_members(self.id));
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(pid) = pending.pop() {
+            if !seen.insert(pid) {
+                continue;
+            }
+            if let Some(stamp) = identity(pid) {
+                self.members.insert(pid, stamp);
+                pending.extend(children(pid));
+            }
+        }
     }
 
     /// 只终止自有进程组，直接 Child 的 kill/wait 由共享所有者始终执行。
     pub(super) fn terminate(&self) -> io::Result<()> {
-        // SAFETY: 本组由 process_group(0) 或 current() 创建，负 PID 只指向自有隔离域。
-        if unsafe { libc::kill(-self.id, libc::SIGKILL) } == 0 {
-            return Ok(());
+        let mut failure = None;
+        // 先终止已观察到的后代；其进程组可以因嵌套 owner 或 setsid 而改变。
+        for (&pid, &stamp) in &self.members {
+            if pid == self.id || identity(pid) != Some(stamp) {
+                continue;
+            }
+            // SAFETY: PID 和出生时间共同确认它仍是当前所有者记录的进程。
+            if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    failure = Some(error);
+                }
+            }
         }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            Ok(())
-        } else {
-            Err(error)
+        // SAFETY: 负 PID 只终止本次 spawn/current 创建的专属进程组。
+        if unsafe { libc::kill(-self.id, libc::SIGKILL) } != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                failure = Some(error);
+            }
         }
+        failure.map_or(Ok(()), Err)
     }
 
-    /// 根 Child 已回收后检查组与快照；不能把父退出当作整棵树完成。
+    /// 根已回收后继续终止残留成员，覆盖首轮信号与 fork 交错时刚出现的后代。
     pub(super) fn wait(&self) -> io::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             // SAFETY: 信号 0 仅查询自有组及此前记录的成员，不发送终止信号。
-            let alive = unsafe { libc::kill(-self.id, 0) } == 0
-                || self
-                    .members
-                    .iter()
-                    .any(|pid| unsafe { libc::kill(*pid, 0) } == 0);
+            let probe = if unsafe { libc::kill(-self.id, 0) } == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            };
+            let mut alive = group_probe_alive(probe)?;
+            for (&pid, &stamp) in &self.members {
+                alive |= recorded_member_alive(pid, stamp)?;
+            }
             if !alive {
                 return Ok(());
             }
             if Instant::now() >= deadline {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "子进程树回收超时"));
             }
+            if let Err(error) = self.terminate() {
+                // macOS 的纯 zombie 组可能拒绝信号；仍须等到组和已记录成员都消失。
+                if error.raw_os_error() != Some(libc::EPERM) {
+                    return Err(error);
+                }
+            }
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+/// 出生信息消失可能只是 zombie 过渡；仅查询 PID 是否仍存在，不对未知身份发送信号。
+fn recorded_member_alive(pid: i32, stamp: (u64, u64)) -> io::Result<bool> {
+    match identity(pid) {
+        Some(current) => Ok(current == stamp),
+        None => {
+            // SAFETY: 信号 0 只观察；PID 已复用时也不会终止不属于当前树的对象。
+            let probe = if unsafe { libc::kill(pid, 0) } == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            };
+            group_probe_alive(probe)
         }
     }
 }
@@ -123,3 +175,106 @@ fn group_members(group: i32) -> Vec<i32> {
 fn group_members(_group: i32) -> Vec<i32> {
     Vec::new()
 }
+
+/// macOS 按内核记录的出生时间避免 PID 复用造成误杀。
+#[cfg(target_os = "macos")]
+fn identity(pid: i32) -> Option<(u64, u64)> {
+    // SAFETY: BSDINFO 的 POD 大小与内核公开接口一致，只读进程元数据。
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as i32;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (read == size).then_some((info.pbi_start_tvsec, info.pbi_start_tvusec))
+}
+
+/// macOS 查询直接后代，递归遍历由快照负责，包含另建进程组的子进程。
+#[cfg(target_os = "macos")]
+fn children(pid: i32) -> Vec<i32> {
+    let mut capacity = 64;
+    loop {
+        let mut values = vec![0i32; capacity];
+        // SAFETY: PROC_PPID_ONLY=6，缓冲区按 PID 元素分配。
+        let bytes = unsafe {
+            libc::proc_listpids(
+                6,
+                pid as u32,
+                values.as_mut_ptr().cast(),
+                (capacity * 4) as i32,
+            )
+        };
+        if bytes <= 0 {
+            return Vec::new();
+        }
+        let count = bytes as usize / 4;
+        if count < capacity {
+            values.truncate(count);
+            values.retain(|v| *v > 0);
+            return values;
+        }
+        capacity *= 2;
+    }
+}
+
+/// Linux 的启动时钟 tick 是进程身份的一部分，测试平台保留同样的复用保护。
+#[cfg(target_os = "linux")]
+fn identity(pid: i32) -> Option<(u64, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<_> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    Some((fields.get(19)?.parse().ok()?, 0))
+}
+
+/// Linux 按父身份读取当前后代，不受其进程组变化影响。
+#[cfg(target_os = "linux")]
+fn children(pid: i32) -> Vec<i32> {
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let child: i32 = entry.file_name().to_str()?.parse().ok()?;
+            let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+            (stat
+                .rsplit_once(')')?
+                .1
+                .split_whitespace()
+                .nth(1)?
+                .parse::<i32>()
+                .ok()?
+                == pid)
+                .then_some(child)
+        })
+        .collect()
+}
+
+/// 非目标 Unix 平台仅保留组管理，不声明相同的脱组后代保证。
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn identity(pid: i32) -> Option<(u64, u64)> {
+    (unsafe { libc::kill(pid, 0) } == 0).then_some((0, 0))
+}
+
+/// 非目标 Unix 平台没有本项目维护的枚举实现。
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn children(_: i32) -> Vec<i32> {
+    Vec::new()
+}
+
+/// 只有 ESRCH 能证明组已消失；权限失败仍按存活等待，其他查询错误直接失败。
+fn group_probe_alive(probe: io::Result<()>) -> io::Result<bool> {
+    match probe {
+        Ok(()) => Ok(true),
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(false),
+        Err(error) if error.raw_os_error() == Some(libc::EPERM) => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/unix_group.rs"]
+mod tests;
